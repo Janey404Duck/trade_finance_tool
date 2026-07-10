@@ -1,55 +1,56 @@
-import type { CalculateInput, Quote } from './types';
+import type { CalculateInput, QuotePackage } from './types';
 
 export type EligibilityResult = {
   eligible: boolean;
   reason?: string;
 };
 
-export function evaluateQuoteEligibility(
-  quote: Quote,
+export function evaluateQuotePackageEligibility(
+  quotePackage: QuotePackage,
   input: CalculateInput,
-  quoteIssuingBanks: Array<{ quoteId: string; issuingBankId: string }>,
+  quotePackageIssuingBanks: Array<{ quotePackageId: string; issuingBankId: string }>,
   today = new Date(),
 ): EligibilityResult {
-  if (!quote.active) {
-    return { eligible: false, reason: 'Quote is inactive.' };
+  if (!quotePackage.active) {
+    return { eligible: false, reason: 'Quote package is inactive.' };
   }
 
-  if (quote.currency.toUpperCase() !== input.currency.toUpperCase()) {
+  if (quotePackage.currency.toUpperCase() !== input.currency.toUpperCase()) {
     return { eligible: false, reason: 'Currency does not match.' };
   }
 
-  if (quote.validFrom && compareDateOnly(today, quote.validFrom) < 0) {
-    return { eligible: false, reason: 'Quote is not yet valid.' };
+  if (quotePackage.validFrom && compareDateOnly(today, quotePackage.validFrom) < 0) {
+    return { eligible: false, reason: 'Quote package is not yet valid.' };
   }
 
-  if (quote.validTo && compareDateOnly(today, quote.validTo) > 0) {
-    return { eligible: false, reason: 'Quote has expired.' };
+  if (quotePackage.validTo && compareDateOnly(today, quotePackage.validTo) > 0) {
+    return { eligible: false, reason: 'Quote package has expired.' };
   }
 
-  if (quote.minAmount != null && input.transactionAmount < quote.minAmount) {
-    return { eligible: false, reason: 'Transaction amount is below quote minimum.' };
+  if (quotePackage.minAmount != null && input.transactionAmount < quotePackage.minAmount) {
+    return { eligible: false, reason: 'Transaction amount is below package minimum.' };
   }
 
-  if (quote.maxAmount != null && input.transactionAmount > quote.maxAmount) {
-    return { eligible: false, reason: 'Transaction amount exceeds quote maximum.' };
+  if (quotePackage.maxAmount != null && input.transactionAmount > quotePackage.maxAmount) {
+    return { eligible: false, reason: 'Transaction amount exceeds package maximum.' };
   }
 
-  if (quote.minMaturityDays != null && input.lcMaturityDays < quote.minMaturityDays) {
-    return { eligible: false, reason: 'LC maturity is below quote minimum.' };
+  if (quotePackage.minMaturityDays != null && input.maturityDays < quotePackage.minMaturityDays) {
+    return { eligible: false, reason: 'LC maturity is below package minimum.' };
   }
 
-  if (quote.maxMaturityDays != null && input.lcMaturityDays > quote.maxMaturityDays) {
-    return { eligible: false, reason: 'LC maturity exceeds quote maximum.' };
+  if (quotePackage.maxMaturityDays != null && input.maturityDays > quotePackage.maxMaturityDays) {
+    return { eligible: false, reason: 'LC maturity exceeds package maximum.' };
   }
 
-  if (!quote.appliesToAllIssuingBanks) {
-    const allowed = quoteIssuingBanks.some(
-      (row) => row.quoteId === quote.id && row.issuingBankId === input.issuingBankId,
+  if (!quotePackage.appliesToAllIssuingBanks) {
+    const allowed = quotePackageIssuingBanks.some(
+      (row) =>
+        row.quotePackageId === quotePackage.id && row.issuingBankId === input.issuingBankId,
     );
 
     if (!allowed) {
-      return { eligible: false, reason: 'Issuing bank is not accepted by quote.' };
+      return { eligible: false, reason: 'Issuing bank is not accepted by quote package.' };
     }
   }
 

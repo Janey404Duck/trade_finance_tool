@@ -2,23 +2,25 @@ import type { AnchorType } from './anchors';
 
 export type InstitutionType = 'bank' | 'trading_house' | 'broker' | 'insurance_company' | 'other';
 
-export type FinancingType =
-  | 'confirmation'
-  | 'discounting'
-  | 'forfaiting'
-  | 'mixed'
-  | 'issuing_fee'
-  | 'trading_house';
+export type SolutionPath = 'CONFIRMATION' | 'FORFAITING';
+
+export type MaturityBasis = 'AFTER_SHIPMENT' | 'AFTER_LC_ISSUANCE';
+
+export type QuoteComponentType =
+  | 'CONFIRMATION'
+  | 'DEFERRED'
+  | 'DISCOUNTING'
+  | 'FORFAITING'
+  | 'OTHER';
 
 export type ChargeType =
-  | 'confirmation'
-  | 'deferred'
-  | 'discounting'
-  | 'forfaiting'
-  | 'issuing_fee'
-  | 'handling'
-  | 'amendment'
-  | 'other';
+  | 'CONFIRMATION_FEE'
+  | 'DEFERRED_PAYMENT_FEE'
+  | 'DISCOUNTING_FEE'
+  | 'FORFAITING_FEE'
+  | 'HANDLING_FEE'
+  | 'ISSUING_BANK_FEE'
+  | 'OTHER';
 
 export type PayerType = 'applicant' | 'beneficiary' | 'shared' | 'unknown';
 
@@ -30,17 +32,22 @@ export type CalculateInput = {
   issuingBankId: string;
   currency: string;
   transactionAmount: number;
-  lcMaturityDays: number;
-  shipmentDays: number;
-  paymentTermsDays: number;
-  selectedQuoteIds?: string[];
+  shipmentDaysAfterLcIssue: number;
+  maturityBasis: MaturityBasis;
+  maturityDays: number;
+  selectedPaths: SolutionPath[];
+  confirmationOptions?: {
+    includeDiscounting: boolean;
+    discountStartDaysAfterShipment?: number;
+  };
+  selectedQuotePackageIds?: string[];
 };
 
 export type AnchorDays = Record<AnchorType, number>;
 
 export type ChargeRule = {
   id: string;
-  quoteId?: string;
+  quoteComponentId?: string;
   issuingBankFeeRuleId?: string;
   issuingBankId?: string;
   currency?: string;
@@ -76,14 +83,12 @@ export type ReferenceRate = {
   source?: string | null;
 };
 
-export type Quote = {
+export type QuotePackage = {
   id: string;
   institutionId: string;
   institutionName: string;
-  quoteName: string;
+  packageName: string;
   currency: string;
-  financingType: FinancingType;
-  requiresConfirmation: boolean;
   appliesToAllIssuingBanks: boolean;
   minAmount?: number | null;
   maxAmount?: number | null;
@@ -95,9 +100,19 @@ export type Quote = {
   notes?: string | null;
 };
 
+export type QuoteComponent = {
+  id: string;
+  quotePackageId: string;
+  componentType: QuoteComponentType;
+  active: boolean;
+  notes?: string | null;
+};
+
 export type ChargeResultLine = {
   sourceType: 'quote_charge_rule' | 'issuing_bank_fee_rule';
   sourceRuleId: string;
+  quoteComponentId?: string | null;
+  componentType?: QuoteComponentType | null;
   chargeType: ChargeType;
   payer: PayerType;
   startAnchor?: AnchorType | null;
@@ -123,15 +138,19 @@ export type ChargeResultLine = {
   displayOrder: number;
 };
 
-export type QuoteCalculationResult = {
-  quoteId: string;
+export type CalculationPathResult = {
+  quotePackageId: string;
   institutionId: string;
   institutionName: string;
-  quoteName: string;
-  financingType: FinancingType;
+  packageName: string;
+  solutionPath: SolutionPath;
+  includesDiscounting: boolean;
   eligible: boolean;
   ineligibilityReason?: string;
-  externalQuoteCost: number;
+  confirmationCost: number;
+  deferredCost: number;
+  discountingCost: number;
+  forfaitingCost: number;
   issuingBankCost: number;
   totalCost: number;
   allInPct: number;
@@ -139,8 +158,9 @@ export type QuoteCalculationResult = {
 };
 
 export type ScenarioData = {
-  quotes: Quote[];
-  quoteIssuingBanks: Array<{ quoteId: string; issuingBankId: string }>;
+  quotePackages: QuotePackage[];
+  quotePackageIssuingBanks: Array<{ quotePackageId: string; issuingBankId: string }>;
+  quoteComponents: QuoteComponent[];
   quoteChargeRules: ChargeRule[];
   issuingBankFeeRules: ChargeRule[];
   referenceRates: ReferenceRate[];
@@ -148,5 +168,5 @@ export type ScenarioData = {
 
 export type ScenarioResult = {
   assumptions: AnchorDays;
-  results: QuoteCalculationResult[];
+  results: CalculationPathResult[];
 };

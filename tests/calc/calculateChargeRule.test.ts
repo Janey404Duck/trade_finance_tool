@@ -7,9 +7,14 @@ const input: CalculateInput = {
   issuingBankId: '20000000-0000-0000-0000-000000000001',
   currency: 'USD',
   transactionAmount: 1_000_000,
-  lcMaturityDays: 360,
-  shipmentDays: 30,
-  paymentTermsDays: 105,
+  shipmentDaysAfterLcIssue: 30,
+  maturityBasis: 'AFTER_SHIPMENT',
+  maturityDays: 360,
+  selectedPaths: ['CONFIRMATION'],
+  confirmationOptions: {
+    includeDiscounting: true,
+    discountStartDaysAfterShipment: 90,
+  },
 };
 
 const referenceRates: ReferenceRate[] = [
@@ -47,12 +52,12 @@ describe('calculateChargeRule', () => {
     expect(line.finalFee).toBeCloseTo(8_000, 6);
   });
 
-  it('calculates base plus spread fees', () => {
+  it('calculates discounting from discount start to revised final maturity', () => {
     const rule = baseRule({
       rateType: 'base_plus_spread',
       baseRateKey: 'COF',
       spreadPct: 0.2,
-      startAnchor: 'SUPPLIER_PAYMENT_DAY',
+      startAnchor: 'DISCOUNT_START_DAY',
       endAnchor: 'FINAL_MATURITY_DAY',
     });
 
@@ -64,10 +69,12 @@ describe('calculateChargeRule', () => {
       sourceType: 'quote_charge_rule',
     });
 
-    expect(line.chargeDays).toBe(255);
+    expect(line.startDay).toBe(120);
+    expect(line.endDay).toBe(390);
+    expect(line.chargeDays).toBe(270);
     expect(line.baseRatePct).toBe(4.2);
     expect(line.effectiveRatePct).toBeCloseTo(4.4, 6);
-    expect(line.finalFee).toBeCloseTo(31_166.6667, 4);
+    expect(line.finalFee).toBeCloseTo(33_000, 6);
   });
 
   it('calculates flat percentage fees', () => {
@@ -134,8 +141,8 @@ describe('calculateChargeRule', () => {
 function baseRule(overrides: Partial<ChargeRule>): ChargeRule {
   return {
     id: 'rule-1',
-    quoteId: 'quote-1',
-    chargeType: 'discounting',
+    quoteComponentId: 'component-1',
+    chargeType: 'DISCOUNTING_FEE',
     payer: 'applicant',
     rateType: 'annual_pct',
     amountBasis: 'transaction_amount',

@@ -1,7 +1,18 @@
 import { calculateChargeRule } from './calculateChargeRule';
-import { evaluateQuoteEligibility } from './quoteEligibility';
+import { evaluateQuotePackageEligibility } from './quoteEligibility';
 import { resolveAnchorDays } from './resolveAnchorDay';
-import type { CalculateInput, ChargeRule, Quote, QuoteCalculationResult, ScenarioData, ScenarioResult } from './types';
+import type {
+  CalculateInput,
+  CalculationPathResult,
+  ChargeResultLine,
+  ChargeRule,
+  QuoteComponent,
+  QuoteComponentType,
+  QuotePackage,
+  ScenarioData,
+  ScenarioResult,
+  SolutionPath,
+} from './types';
 
 export function calculateScenario(
   input: CalculateInput,
@@ -9,10 +20,10 @@ export function calculateScenario(
   today = new Date(),
 ): ScenarioResult {
   const assumptions = resolveAnchorDays(input);
-  const selectedQuoteIds = new Set(input.selectedQuoteIds ?? []);
-  const quotes = selectedQuoteIds.size
-    ? data.quotes.filter((quote) => selectedQuoteIds.has(quote.id))
-    : data.quotes;
+  const selectedPackageIds = new Set(input.selectedQuotePackageIds ?? []);
+  const quotePackages = selectedPackageIds.size
+    ? data.quotePackages.filter((quotePackage) => selectedPackageIds.has(quotePackage.id))
+    : data.quotePackages;
   const issuingBankFeeRules = data.issuingBankFeeRules.filter(
     (rule) =>
       rule.active !== false &&
@@ -20,14 +31,11 @@ export function calculateScenario(
       (!rule.currency || rule.currency.toUpperCase() === input.currency.toUpperCase()),
   );
 
-  const results = quotes.map((quote) =>
-    calculateQuoteResult({
-      quote,
+  const results = quotePackages.flatMap((quotePackage) =>
+    calculatePackageResults({
+      quotePackage,
       input,
       data,
-      quoteChargeRules: data.quoteChargeRules.filter(
-        (rule) => rule.quoteId === quote.id && rule.active !== false,
-      ),
       issuingBankFeeRules,
       today,
       assumptions,
@@ -36,55 +44,118 @@ export function calculateScenario(
 
   return {
     assumptions,
-    results: results.sort((a, b) => a.totalCost - b.totalCost),
+    results: results.sort((a, b) => {
+      if (a.eligible !== b.eligible) {
+        return a.eligible ? -1 : 1;
+      }
+
+      return a.totalCost - b.totalCost;
+    }),
   };
 }
 
-function calculateQuoteResult({
-  quote,
+function calculatePackageResults({
+  quotePackage,
   input,
   data,
-  quoteChargeRules,
   issuingBankFeeRules,
   today,
   assumptions,
 }: {
-  quote: Quote;
+  quotePackage: QuotePackage;
   input: CalculateInput;
   data: ScenarioData;
-  quoteChargeRules: ChargeRule[];
   issuingBankFeeRules: ChargeRule[];
   today: Date;
   assumptions: ReturnType<typeof resolveAnchorDays>;
-}): QuoteCalculationResult {
-  const eligibility = evaluateQuoteEligibility(quote, input, data.quoteIssuingBanks, today);
-
-  if (!eligibility.eligible) {
-    return {
-      quoteId: quote.id,
-      institutionId: quote.institutionId,
-      institutionName: quote.institutionName,
-      quoteName: quote.quoteName,
-      financingType: quote.financingType,
-      eligible: false,
-      ineligibilityReason: eligibility.reason,
-      externalQuoteCost: 0,
-      issuingBankCost: 0,
-      totalCost: 0,
-      allInPct: 0,
-      lines: [],
-    };
-  }
-
-  const quoteLines = quoteChargeRules.map((rule) =>
-    calculateChargeRule({
-      rule,
-      input,
-      anchorDays: assumptions,
-      referenceRates: data.referenceRates,
-      sourceType: 'quote_charge_rule',
-    }),
+}): CalculationPathResult[] {
+  const eligibility = evaluateQuotePackageEligibility(
+    quotePackage,
+    input,
+    data.quotePackageIssuingBanks,
+    today,
   );
+  const packageComponents = data.quoteComponents.filter(
+    (component) => component.quotePackageId === quotePackage.id && component.active,
+  );
+
+  return input.selectedPaths.flatMap((solutionPath) => {
+    const pathComponents = selectPathComponents(packageComponents, solutionPath, input);
+
+    if (!eligibility.eligible) {
+      return [
+        emptyPathResult({
+          quotePackage,
+          solutionPath,
+          includesDiscounting: includesDiscounting(solutionPath, input),
+          ineligibilityReason: eligibility.reason,
+        }),
+      ];
+    }
+
+    if (!hasRequiredPathComponent(pathComponents, solutionPath)) {
+      return [];
+    }
+
+    return [
+      calculatePathResult({
+        quotePackage,
+        solutionPath,
+        includesDiscounting: includesDiscounting(solutionPath, input),
+        pathComponents,
+        data,
+        input,
+        assumptions,
+        issuingBankFeeRules,
+      }),
+    ];
+  });
+}
+
+function calculatePathResult({
+  quotePackage,
+  solutionPath,
+  includesDiscounting,
+  pathComponents,
+  data,
+  input,
+  assumptions,
+  issuingBankFeeRules,
+}: {
+  quotePackage: QuotePackage;
+  solutionPath: SolutionPath;
+  includesDiscounting: boolean;
+  pathComponents: QuoteComponent[];
+  data: ScenarioData;
+  input: CalculateInput;
+  assumptions: ReturnType<typeof resolveAnchorDays>;
+  issuingBankFeeRules: ChargeRule[];
+}): CalculationPathResult {
+  const componentTypeById = new Map(
+    pathComponents.map((component) => [component.id, component.componentType]),
+  );
+  const quoteLines = data.quoteChargeRules
+    .filter(
+      (rule) =>
+        rule.active !== false &&
+        rule.quoteComponentId != null &&
+        componentTypeById.has(rule.quoteComponentId),
+    )
+    .map((rule) => {
+      const line = calculateChargeRule({
+        rule,
+        input,
+        anchorDays: assumptions,
+        referenceRates: data.referenceRates,
+        sourceType: 'quote_charge_rule',
+      });
+
+      return {
+        ...line,
+        quoteComponentId: rule.quoteComponentId,
+        componentType: componentTypeById.get(rule.quoteComponentId ?? '') ?? null,
+      };
+    });
   const issuingBankLines = issuingBankFeeRules.map((rule) =>
     calculateChargeRule({
       rule,
@@ -94,23 +165,101 @@ function calculateQuoteResult({
       sourceType: 'issuing_bank_fee_rule',
     }),
   );
-  const externalQuoteCost = sumFees(quoteLines);
+  const lines = [...quoteLines, ...issuingBankLines].sort(
+    (a, b) => a.displayOrder - b.displayOrder,
+  );
+  const confirmationCost = sumComponentFees(lines, 'CONFIRMATION');
+  const deferredCost = sumComponentFees(lines, 'DEFERRED');
+  const discountingCost = sumComponentFees(lines, 'DISCOUNTING');
+  const forfaitingCost = sumComponentFees(lines, 'FORFAITING');
   const issuingBankCost = sumFees(issuingBankLines);
-  const totalCost = externalQuoteCost + issuingBankCost;
+  const totalCost =
+    confirmationCost + deferredCost + discountingCost + forfaitingCost + issuingBankCost;
 
   return {
-    quoteId: quote.id,
-    institutionId: quote.institutionId,
-    institutionName: quote.institutionName,
-    quoteName: quote.quoteName,
-    financingType: quote.financingType,
+    quotePackageId: quotePackage.id,
+    institutionId: quotePackage.institutionId,
+    institutionName: quotePackage.institutionName,
+    packageName: quotePackage.packageName,
+    solutionPath,
+    includesDiscounting,
     eligible: true,
-    externalQuoteCost,
+    confirmationCost,
+    deferredCost,
+    discountingCost,
+    forfaitingCost,
     issuingBankCost,
     totalCost,
     allInPct: totalCost / input.transactionAmount * 100,
-    lines: [...quoteLines, ...issuingBankLines].sort((a, b) => a.displayOrder - b.displayOrder),
+    lines,
   };
+}
+
+function selectPathComponents(
+  components: QuoteComponent[],
+  solutionPath: SolutionPath,
+  input: CalculateInput,
+): QuoteComponent[] {
+  if (solutionPath === 'FORFAITING') {
+    return components.filter((component) => component.componentType === 'FORFAITING');
+  }
+
+  const allowedTypes: QuoteComponentType[] = ['CONFIRMATION', 'DEFERRED'];
+
+  if (input.confirmationOptions?.includeDiscounting) {
+    allowedTypes.push('DISCOUNTING');
+  }
+
+  return components.filter((component) => allowedTypes.includes(component.componentType));
+}
+
+function hasRequiredPathComponent(components: QuoteComponent[], solutionPath: SolutionPath): boolean {
+  const requiredType: QuoteComponentType =
+    solutionPath === 'CONFIRMATION' ? 'CONFIRMATION' : 'FORFAITING';
+
+  return components.some((component) => component.componentType === requiredType);
+}
+
+function includesDiscounting(solutionPath: SolutionPath, input: CalculateInput): boolean {
+  return solutionPath === 'CONFIRMATION' && input.confirmationOptions?.includeDiscounting === true;
+}
+
+function emptyPathResult({
+  quotePackage,
+  solutionPath,
+  includesDiscounting,
+  ineligibilityReason,
+}: {
+  quotePackage: QuotePackage;
+  solutionPath: SolutionPath;
+  includesDiscounting: boolean;
+  ineligibilityReason?: string;
+}): CalculationPathResult {
+  return {
+    quotePackageId: quotePackage.id,
+    institutionId: quotePackage.institutionId,
+    institutionName: quotePackage.institutionName,
+    packageName: quotePackage.packageName,
+    solutionPath,
+    includesDiscounting,
+    eligible: false,
+    ineligibilityReason,
+    confirmationCost: 0,
+    deferredCost: 0,
+    discountingCost: 0,
+    forfaitingCost: 0,
+    issuingBankCost: 0,
+    totalCost: 0,
+    allInPct: 0,
+    lines: [],
+  };
+}
+
+function sumComponentFees(
+  lines: ChargeResultLine[],
+  componentType: QuoteComponentType,
+): number {
+  return sumFees(lines.filter((line) => line.componentType === componentType));
 }
 
 function sumFees(lines: Array<{ finalFee: number }>): number {
