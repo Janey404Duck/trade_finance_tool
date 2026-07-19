@@ -1,106 +1,106 @@
 insert into public.institutions (id, name, institution_type, country)
 values
-  ('10000000-0000-0000-0000-000000000001', 'Natixis', 'bank', 'France'),
-  ('10000000-0000-0000-0000-000000000002', 'QNB', 'bank', 'Qatar'),
-  ('10000000-0000-0000-0000-000000000003', 'Habib Bank', 'bank', 'Pakistan'),
-  ('10000000-0000-0000-0000-000000000004', 'China Trade Solutions', 'trading_house', 'China')
-on conflict (id) do nothing;
+  ('10000000-0000-0000-0000-000000000001', 'Standard Chartered', 'bank', 'United Kingdom'),
+  ('10000000-0000-0000-0000-000000000002', 'Citi', 'bank', 'United States'),
+  ('10000000-0000-0000-0000-000000000003', 'Bank of China', 'bank', 'China'),
+  ('10000000-0000-0000-0000-000000000004', 'Ziraat Bank', 'bank', 'Turkey')
+on conflict (id) do update set
+  name = excluded.name,
+  institution_type = excluded.institution_type,
+  country = excluded.country,
+  active = true;
 
-insert into public.issuing_banks (id, name, country)
-values
-  ('20000000-0000-0000-0000-000000000001', 'Ziraat Bank', 'Turkey'),
-  ('20000000-0000-0000-0000-000000000002', 'Halkbank', 'Turkey'),
-  ('20000000-0000-0000-0000-000000000003', 'VakifBank', 'Turkey'),
-  ('20000000-0000-0000-0000-000000000004', 'Garanti BBVA', 'Turkey'),
-  ('20000000-0000-0000-0000-000000000005', 'Isbank', 'Turkey')
-on conflict (id) do nothing;
-
-insert into public.reference_rates (id, rate_key, currency, tenor_days, rate_pct, rate_date, source)
-values
-  ('30000000-0000-0000-0000-000000000001', 'COF', 'USD', 360, 4.20, current_date, 'Seed'),
-  ('30000000-0000-0000-0000-000000000002', 'TERM_SOFR', 'USD', 360, 4.50, current_date, 'Seed'),
-  ('30000000-0000-0000-0000-000000000003', 'TERM_SHIBOR', 'RMB', 360, 2.30, current_date, 'Seed')
-on conflict (rate_key, currency, tenor_days, rate_date) do nothing;
-
-insert into public.quote_packages (
-  id,
-  institution_id,
-  package_name,
-  currency,
-  applies_to_all_issuing_banks
-)
-values
-  ('40000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000001', 'Natixis USD Package', 'USD', false),
-  ('40000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000002', 'QNB USD Package', 'USD', false),
-  ('40000000-0000-0000-0000-000000000003', '10000000-0000-0000-0000-000000000004', 'China Trade Solutions USD Package', 'USD', true)
-on conflict (id) do nothing;
-
-insert into public.quote_package_issuing_banks (quote_package_id, issuing_bank_id)
-values
-  ('40000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001'),
-  ('40000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000003'),
-  ('40000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000001'),
-  ('40000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000003'),
-  ('40000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000004'),
-  ('40000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000005')
-on conflict (quote_package_id, issuing_bank_id) do nothing;
-
-insert into public.quote_components (id, quote_package_id, component_type)
-values
-  ('41000000-0000-0000-0000-000000000001', '40000000-0000-0000-0000-000000000001', 'CONFIRMATION'),
-  ('41000000-0000-0000-0000-000000000002', '40000000-0000-0000-0000-000000000001', 'DEFERRED'),
-  ('41000000-0000-0000-0000-000000000003', '40000000-0000-0000-0000-000000000001', 'DISCOUNTING'),
-  ('41000000-0000-0000-0000-000000000004', '40000000-0000-0000-0000-000000000001', 'FORFAITING'),
-  ('41000000-0000-0000-0000-000000000005', '40000000-0000-0000-0000-000000000002', 'CONFIRMATION'),
-  ('41000000-0000-0000-0000-000000000006', '40000000-0000-0000-0000-000000000002', 'DISCOUNTING'),
-  ('41000000-0000-0000-0000-000000000007', '40000000-0000-0000-0000-000000000003', 'FORFAITING')
-on conflict (id) do nothing;
-
-insert into public.quote_charge_rules (
-  id,
-  quote_component_id,
-  charge_type,
-  payer,
-  rate_type,
-  fixed_rate_pct,
-  base_rate_key,
-  spread_pct,
-  amount_basis,
-  day_count_basis,
-  start_anchor,
-  end_anchor,
-  display_order
-)
-values
-  ('50000000-0000-0000-0000-000000000001', '41000000-0000-0000-0000-000000000001', 'CONFIRMATION_FEE', 'applicant', 'annual_pct', 0.80, null, null, 'transaction_amount', 360, 'LC_ISSUE_DAY', 'SHIPMENT_DAY', 10),
-  ('50000000-0000-0000-0000-000000000002', '41000000-0000-0000-0000-000000000002', 'DEFERRED_PAYMENT_FEE', 'applicant', 'annual_pct', 0.80, null, null, 'transaction_amount', 360, 'SHIPMENT_DAY', 'FINAL_MATURITY_DAY', 20),
-  ('50000000-0000-0000-0000-000000000003', '41000000-0000-0000-0000-000000000003', 'DISCOUNTING_FEE', 'applicant', 'base_plus_spread', null, 'COF', 0.20, 'transaction_amount', 360, 'DISCOUNT_START_DAY', 'FINAL_MATURITY_DAY', 30),
-  ('50000000-0000-0000-0000-000000000004', '41000000-0000-0000-0000-000000000004', 'FORFAITING_FEE', 'applicant', 'annual_pct', 4.00, null, null, 'transaction_amount', 360, 'SHIPMENT_DAY', 'FINAL_MATURITY_DAY', 40),
-  ('50000000-0000-0000-0000-000000000005', '41000000-0000-0000-0000-000000000005', 'CONFIRMATION_FEE', 'applicant', 'annual_pct', 1.20, null, null, 'transaction_amount', 360, 'LC_ISSUE_DAY', 'FINAL_MATURITY_DAY', 10),
-  ('50000000-0000-0000-0000-000000000006', '41000000-0000-0000-0000-000000000006', 'DISCOUNTING_FEE', 'applicant', 'base_plus_spread', null, 'COF', 0.30, 'transaction_amount', 360, 'DISCOUNT_START_DAY', 'FINAL_MATURITY_DAY', 20),
-  ('50000000-0000-0000-0000-000000000007', '41000000-0000-0000-0000-000000000007', 'FORFAITING_FEE', 'applicant', 'annual_pct', 4.00, null, null, 'transaction_amount', 360, 'SHIPMENT_DAY', 'FINAL_MATURITY_DAY', 10)
-on conflict (id) do nothing;
-
-insert into public.issuing_bank_fee_rules (
-  id,
-  issuing_bank_id,
-  currency,
-  fee_name,
-  charge_type,
-  rate_type,
-  fixed_rate_pct,
-  amount_basis,
-  day_count_basis
-)
+insert into public.trade_templates (id, name, description)
 values (
-  '60000000-0000-0000-0000-000000000001',
   '20000000-0000-0000-0000-000000000001',
-  'USD',
-  'Opening Fee',
-  'ISSUING_BANK_FEE',
-  'flat_pct',
-  2.00,
-  'transaction_amount',
-  360
+  'Standard USD usance LC',
+  'Reusable event relationships for a 360-day usance LC.'
 )
-on conflict (id) do nothing;
+on conflict (id) do update set name = excluded.name, description = excluded.description, active = true;
+
+insert into public.trade_template_events (
+  id, trade_template_id, event_name, anchor_event_name, offset_days, day_type,
+  business_day_convention
+)
+values
+  ('21000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000001', 'shipment', 'trade_start', 45, 'calendar', 'none'),
+  ('21000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000001', 'lc_issuance', 'shipment', -10, 'calendar', 'none'),
+  ('21000000-0000-0000-0000-000000000003', '20000000-0000-0000-0000-000000000001', 'presentation', 'shipment', 7, 'calendar', 'none'),
+  ('21000000-0000-0000-0000-000000000004', '20000000-0000-0000-0000-000000000001', 'acceptance', 'presentation', 5, 'calendar', 'none'),
+  ('21000000-0000-0000-0000-000000000005', '20000000-0000-0000-0000-000000000001', 'supplier_payment', 'acceptance', 2, 'calendar', 'none'),
+  ('21000000-0000-0000-0000-000000000006', '20000000-0000-0000-0000-000000000001', 'lc_maturity', 'shipment', 360, 'calendar', 'following')
+on conflict (trade_template_id, event_name) do update set
+  anchor_event_name = excluded.anchor_event_name,
+  offset_days = excluded.offset_days,
+  day_type = excluded.day_type,
+  business_day_convention = excluded.business_day_convention;
+
+insert into public.reference_rate_indices (
+  id, name, family, currency, tenor_months
+)
+values
+  ('30000000-0000-0000-0000-000000000001', '12M Term SOFR', 'TERM_SOFR', 'USD', 12),
+  ('30000000-0000-0000-0000-000000000002', 'USD Cost of Funds', 'COF', 'USD', null)
+on conflict (family, currency, tenor_months) do update set name = excluded.name, active = true;
+
+insert into public.reference_rate_values (
+  id, reference_rate_index_id, effective_date, rate_pct, source
+)
+values
+  ('31000000-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000001', current_date, 3.85, 'Sample seed data'),
+  ('31000000-0000-0000-0000-000000000002', '30000000-0000-0000-0000-000000000002', current_date, 4.20, 'Sample seed data')
+on conflict (reference_rate_index_id, effective_date) do update set
+  rate_pct = excluded.rate_pct,
+  source = excluded.source;
+
+insert into public.quotations (
+  id, reference, institution_id, currency, product_type, tenor_days
+)
+values
+  ('40000000-0000-0000-0000-000000000001', 'SCB-QT-2026-001', '10000000-0000-0000-0000-000000000001', 'USD', 'lc_financing', 450),
+  ('40000000-0000-0000-0000-000000000002', 'CITI-QT-2026-003', '10000000-0000-0000-0000-000000000002', 'USD', 'lc_financing', 450)
+on conflict (id) do update set
+  reference = excluded.reference,
+  institution_id = excluded.institution_id,
+  currency = excluded.currency,
+  tenor_days = excluded.tenor_days;
+
+insert into public.quotation_issuing_institutions (quotation_id, institution_id)
+values
+  ('40000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000004'),
+  ('40000000-0000-0000-0000-000000000002', '10000000-0000-0000-0000-000000000004')
+on conflict (quotation_id, institution_id) do nothing;
+
+insert into public.quotation_versions (
+  id, quotation_id, version, status, valid_from, valid_to
+)
+values
+  ('41000000-0000-0000-0000-000000000001', '40000000-0000-0000-0000-000000000001', 1, 'active', '2026-01-01', '2026-12-31'),
+  ('41000000-0000-0000-0000-000000000002', '40000000-0000-0000-0000-000000000002', 1, 'active', '2026-01-01', '2026-12-31')
+on conflict (quotation_id, version) do update set
+  status = excluded.status,
+  valid_from = excluded.valid_from,
+  valid_to = excluded.valid_to;
+
+insert into public.pricing_records (
+  id, quotation_version_id, label, component_kind, pricing_condition, rate_type,
+  rate_pct, reference_rate_index_id, spread_pct, start_event_name, end_event_name,
+  day_count_convention, display_order
+)
+values
+  ('42000000-0000-0000-0000-000000000001', '41000000-0000-0000-0000-000000000001', 'Confirmation fee', 'confirmation_fee', 'confirmation_required', 'annualized_percentage', 0.90, null, null, 'lc_issuance', 'lc_maturity', 'ACT/360', 10),
+  ('42000000-0000-0000-0000-000000000002', '41000000-0000-0000-0000-000000000001', 'Discounting with confirmation', 'discounting', 'confirmation_required', 'reference_plus_spread', null, '30000000-0000-0000-0000-000000000001', 0.60, 'supplier_payment', 'lc_maturity', 'ACT/360', 20),
+  ('42000000-0000-0000-0000-000000000003', '41000000-0000-0000-0000-000000000001', 'Discounting without confirmation', 'discounting', 'confirmation_not_required', 'reference_plus_spread', null, '30000000-0000-0000-0000-000000000002', 4.00, 'supplier_payment', 'lc_maturity', 'ACT/360', 30),
+  ('42000000-0000-0000-0000-000000000004', '41000000-0000-0000-0000-000000000002', 'Confirmation fee', 'confirmation_fee', 'confirmation_required', 'annualized_percentage', 1.00, null, null, 'lc_issuance', 'lc_maturity', 'ACT/360', 10),
+  ('42000000-0000-0000-0000-000000000005', '41000000-0000-0000-0000-000000000002', 'Discounting with confirmation', 'discounting', 'confirmation_required', 'reference_plus_spread', null, '30000000-0000-0000-0000-000000000001', 0.50, 'supplier_payment', 'lc_maturity', 'ACT/360', 20),
+  ('42000000-0000-0000-0000-000000000006', '41000000-0000-0000-0000-000000000002', 'Discounting without confirmation', 'discounting', 'confirmation_not_required', 'reference_plus_spread', null, '30000000-0000-0000-0000-000000000002', 3.80, 'supplier_payment', 'lc_maturity', 'ACT/360', 30)
+on conflict (id) do update set
+  label = excluded.label,
+  pricing_condition = excluded.pricing_condition,
+  rate_type = excluded.rate_type,
+  rate_pct = excluded.rate_pct,
+  reference_rate_index_id = excluded.reference_rate_index_id,
+  spread_pct = excluded.spread_pct,
+  start_event_name = excluded.start_event_name,
+  end_event_name = excluded.end_event_name,
+  day_count_convention = excluded.day_count_convention;

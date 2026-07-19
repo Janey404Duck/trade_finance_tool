@@ -2,8 +2,8 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'LC All-in-Cost Comparison',
-  description: 'Compare LC financing quotes across banks and trading houses.',
+  title: 'Trade Finance Workspace',
+  description: 'Model trade timelines and compare independent financing quotations.',
 };
 
 export default function RootLayout({

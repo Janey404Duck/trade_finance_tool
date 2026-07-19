@@ -6,14 +6,13 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
+    "lint": "eslint app lib tests",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
     "@supabase/ssr": "0.7.0",
     "@supabase/supabase-js": "2.110.1",
-    "exceljs": "4.4.0",
     "next": "15.5.20",
     "react": "19.2.7",
     "react-dom": "19.2.7",

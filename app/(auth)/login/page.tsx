@@ -1,22 +1,25 @@
-export default function LoginPage() {
+import { signIn } from './actions';
+
+export default async function LoginPage({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
+  const { error } = await searchParams;
   return (
-    <main className="page">
-      <form className="panel stack">
+    <main className="login-shell">
+      <form action={signIn} className="card login-card stack">
         <div>
-          <h1>Login</h1>
-          <p>Supabase email/password login will be wired in the auth stage.</p>
+          <p className="eyebrow">Trade finance workspace</p>
+          <h1>Sign in</h1>
+          <p>Access scenario comparison and quotation configuration.</p>
         </div>
-        <div className="field">
-          <label htmlFor="email">Email</label>
-          <input id="email" name="email" type="email" autoComplete="email" />
-        </div>
-        <div className="field">
-          <label htmlFor="password">Password</label>
-          <input id="password" name="password" type="password" autoComplete="current-password" />
-        </div>
-        <button className="button" type="button">
-          Sign in
-        </button>
+        {error && <div className="alert" role="alert">{error}</div>}
+        <label className="field">
+          <span>Email</span>
+          <input name="email" type="email" autoComplete="email" required />
+        </label>
+        <label className="field">
+          <span>Password</span>
+          <input name="password" type="password" autoComplete="current-password" required />
+        </label>
+        <button className="button" type="submit">Sign in</button>
       </form>
     </main>
   );
