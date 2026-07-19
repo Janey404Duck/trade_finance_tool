@@ -5,6 +5,7 @@ import type {
   QuotationVersion,
   SelectedQuotation,
 } from './model';
+import { hasPricingCoverage } from './pricingCoverage';
 
 export function selectQuotations(
   quotations: Quotation[],
@@ -14,7 +15,9 @@ export function selectQuotations(
   return quotations.flatMap((quotation) => {
     if (!matchesFilter(quotation, filter) || !isApplicable(quotation, context)) return [];
     const version = latestActiveVersion(quotation.versions, context.asOfDate);
-    return version ? [{ quotation, version }] : [];
+    return version && hasPricingCoverage(version.pricing, context.financing)
+      ? [{ quotation, version }]
+      : [];
   });
 }
 

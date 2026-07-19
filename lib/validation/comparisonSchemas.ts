@@ -33,7 +33,7 @@ export const pricingRecordSchema = z.object({
     z.object({ type: z.literal('annualizedPercentage'), ratePct: z.number().nonnegative() }),
     z.object({
       type: z.literal('referencePlusSpread'),
-      referenceRateIndexId: z.string().min(1),
+      referenceRateFamily: z.enum(['TERM_SOFR', 'TERM_SHIBOR']),
       spreadPct: z.number(),
     }),
   ]),
@@ -46,6 +46,17 @@ export const pricingRecordSchema = z.object({
   minimumFeeAmount: z.number().nonnegative().optional(),
   includeStartDate: z.boolean().optional(),
   includeEndDate: z.boolean().optional(),
+}).superRefine((record, context) => {
+  if (
+    (record.kind === 'discounting' || record.kind === 'forfaiting') &&
+    record.rate.type !== 'referencePlusSpread'
+  ) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['rate'],
+      message: 'Discounting and forfaiting require term reference-rate pricing.',
+    });
+  }
 });
 
 export const quotationSchema = z.object({
@@ -98,6 +109,14 @@ export const comparisonRequestSchema = z.object({
     referenceRates: z.array(z.object({
       indexId: z.string().min(1),
       name: z.string().min(1),
+      family: z.enum(['TERM_SOFR', 'TERM_SHIBOR']),
+      currency: z.string().length(3),
+      tenorMonths: z.union([
+        z.literal(1),
+        z.literal(3),
+        z.literal(6),
+        z.literal(12),
+      ]),
       ratePct: z.number(),
       effectiveDate: z.string().date(),
     })),

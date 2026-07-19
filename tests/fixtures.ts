@@ -59,7 +59,7 @@ export function quotation(overrides: Partial<Quotation> = {}): Quotation {
             condition: 'confirmationRequired',
             rate: {
               type: 'referencePlusSpread',
-              referenceRateIndexId: 'sofr-12m',
+              referenceRateFamily: 'TERM_SOFR',
               spreadPct: 0.6,
             },
             startEvent: 'supplierPayment',
@@ -73,7 +73,7 @@ export function quotation(overrides: Partial<Quotation> = {}): Quotation {
             condition: 'confirmationNotRequired',
             rate: {
               type: 'referencePlusSpread',
-              referenceRateIndexId: 'cof',
+              referenceRateFamily: 'TERM_SOFR',
               spreadPct: 4,
             },
             startEvent: 'supplierPayment',
@@ -88,6 +88,12 @@ export function quotation(overrides: Partial<Quotation> = {}): Quotation {
 }
 
 export const referenceRates = [
-  { indexId: 'sofr-12m', name: '12M Term SOFR', ratePct: 3.85, effectiveDate: '2026-01-01' },
-  { indexId: 'cof', name: 'USD Cost of Funds', ratePct: 4.2, effectiveDate: '2026-01-01' },
+  { indexId: 'sofr-1m', name: '1M Term SOFR', family: 'TERM_SOFR' as const, currency: 'USD', tenorMonths: 1 as const, ratePct: 4.15, effectiveDate: '2026-01-01' },
+  { indexId: 'sofr-3m', name: '3M Term SOFR', family: 'TERM_SOFR' as const, currency: 'USD', tenorMonths: 3 as const, ratePct: 4.10, effectiveDate: '2026-01-01' },
+  { indexId: 'sofr-6m', name: '6M Term SOFR', family: 'TERM_SOFR' as const, currency: 'USD', tenorMonths: 6 as const, ratePct: 4.00, effectiveDate: '2026-01-01' },
+  { indexId: 'sofr-12m', name: '12M Term SOFR', family: 'TERM_SOFR' as const, currency: 'USD', tenorMonths: 12 as const, ratePct: 3.85, effectiveDate: '2026-01-01' },
+  { indexId: 'shibor-1m', name: '1M SHIBOR', family: 'TERM_SHIBOR' as const, currency: 'CNY', tenorMonths: 1 as const, ratePct: 1.55, effectiveDate: '2026-01-01' },
+  { indexId: 'shibor-3m', name: '3M SHIBOR', family: 'TERM_SHIBOR' as const, currency: 'CNY', tenorMonths: 3 as const, ratePct: 1.60, effectiveDate: '2026-01-01' },
+  { indexId: 'shibor-6m', name: '6M SHIBOR', family: 'TERM_SHIBOR' as const, currency: 'CNY', tenorMonths: 6 as const, ratePct: 1.65, effectiveDate: '2026-01-01' },
+  { indexId: 'shibor-12m', name: '12M SHIBOR', family: 'TERM_SHIBOR' as const, currency: 'CNY', tenorMonths: 12 as const, ratePct: 1.70, effectiveDate: '2026-01-01' },
 ];

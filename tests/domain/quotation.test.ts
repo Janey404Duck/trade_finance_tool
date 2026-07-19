@@ -30,6 +30,11 @@ describe('selectQuotations', () => {
       currency: 'USD',
       maturityDays: 370,
       asOfDate: '2026-07-01',
+      financing: {
+        confirmationRequired: false,
+        discounting: false,
+        forfaiting: false,
+      },
     });
 
     expect(selected).toHaveLength(1);
@@ -55,7 +60,40 @@ describe('selectQuotations', () => {
       maturityDays: 360,
       issuingInstitutionId: 'issuer-b',
       asOfDate: '2026-07-01',
+      financing: {
+        confirmationRequired: false,
+        discounting: false,
+        forfaiting: false,
+      },
     });
+    expect(selected).toEqual([]);
+  });
+
+  it('excludes a quotation that lacks discounting pricing for the confirmation choice', () => {
+    const item = quotation({
+      versions: [{
+        id: 'confirmed-only',
+        version: 1,
+        status: 'active',
+        validFrom: '2026-01-01',
+        pricing: quotation().versions[0].pricing.filter(
+          (record) => record.id !== 'discount-unconfirmed',
+        ),
+      }],
+    });
+
+    const selected = selectQuotations([item], {
+      amount: 1_000_000,
+      currency: 'USD',
+      maturityDays: 370,
+      asOfDate: '2026-07-01',
+      financing: {
+        confirmationRequired: false,
+        discounting: true,
+        forfaiting: false,
+      },
+    });
+
     expect(selected).toEqual([]);
   });
 });

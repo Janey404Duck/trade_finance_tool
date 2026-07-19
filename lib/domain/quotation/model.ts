@@ -1,4 +1,5 @@
 import type { TimelineEventName } from '../timeline/model';
+import type { FinancingSelection } from '../financing/model';
 
 export type InstitutionType =
   | 'bank'
@@ -35,9 +36,12 @@ export type PricingRate =
   | { type: 'annualizedPercentage'; ratePct: number }
   | {
       type: 'referencePlusSpread';
-      referenceRateIndexId: string;
+      referenceRateFamily: TermReferenceRateFamily;
       spreadPct: number;
     };
+
+export type TermReferenceRateFamily = 'TERM_SOFR' | 'TERM_SHIBOR';
+export type TermReferenceRateTenorMonths = 1 | 3 | 6 | 12;
 
 export type PricingRecord = {
   id: string;
@@ -90,6 +94,7 @@ export type QuotationContext = {
   maturityDays: number;
   issuingInstitutionId?: string;
   asOfDate: string;
+  financing: FinancingSelection;
 };
 
 export type SelectedQuotation = {

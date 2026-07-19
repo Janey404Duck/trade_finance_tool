@@ -166,7 +166,8 @@ create table public.pricing_records (
     check (rate_type in ('fixed_amount', 'flat_percentage', 'annualized_percentage', 'reference_plus_spread')),
   fixed_amount numeric(20, 6),
   rate_pct numeric(12, 8),
-  reference_rate_index_id uuid,
+  reference_rate_family text
+    check (reference_rate_family in ('TERM_SOFR', 'TERM_SHIBOR')),
   spread_pct numeric(12, 8),
   start_event_name text check (start_event_name in (
     'trade_start', 'purchase_order', 'lc_issuance', 'shipment', 'invoice',
@@ -189,30 +190,34 @@ create table public.pricing_records (
   notes text,
   check ((start_event_name is null) = (end_event_name is null)),
   check (
-    (rate_type = 'fixed_amount' and fixed_amount is not null and rate_pct is null and reference_rate_index_id is null and spread_pct is null)
-    or (rate_type in ('flat_percentage', 'annualized_percentage') and rate_pct is not null and fixed_amount is null and reference_rate_index_id is null and spread_pct is null)
-    or (rate_type = 'reference_plus_spread' and reference_rate_index_id is not null and spread_pct is not null and fixed_amount is null and rate_pct is null)
+    component_kind not in ('discounting', 'forfaiting')
+    or rate_type = 'reference_plus_spread'
+  ),
+  check (
+    (rate_type = 'fixed_amount' and fixed_amount is not null and rate_pct is null and reference_rate_family is null and spread_pct is null)
+    or (rate_type in ('flat_percentage', 'annualized_percentage') and rate_pct is not null and fixed_amount is null and reference_rate_family is null and spread_pct is null)
+    or (rate_type = 'reference_plus_spread' and reference_rate_family is not null and spread_pct is not null and fixed_amount is null and rate_pct is null)
   )
 );
 
 create table public.reference_rate_indices (
   id uuid primary key default gen_random_uuid(),
   name text not null,
-  family text not null,
+  family text not null check (family in ('TERM_SOFR', 'TERM_SHIBOR')),
   currency text not null check (currency ~ '^[A-Z]{3}$'),
-  tenor_months integer check (tenor_months is null or tenor_months > 0),
+  tenor_months integer not null check (tenor_months in (1, 3, 6, 12)),
   active boolean not null default true,
   notes text,
   created_by uuid references public.profiles(id) on delete set null,
   updated_by uuid references public.profiles(id) on delete set null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
+  check (
+    (family = 'TERM_SOFR' and currency = 'USD')
+    or (family = 'TERM_SHIBOR' and currency = 'CNY')
+  ),
   unique nulls not distinct (family, currency, tenor_months)
 );
-
-alter table public.pricing_records
-  add constraint pricing_records_reference_rate_index_id_fkey
-  foreign key (reference_rate_index_id) references public.reference_rate_indices(id) on delete restrict;
 
 create table public.reference_rate_values (
   id uuid primary key default gen_random_uuid(),
@@ -312,12 +317,33 @@ create table public.comparison_cost_lines (
   start_day integer,
   end_day integer,
   charge_days integer,
+  reference_rate_index_id uuid references public.reference_rate_indices(id) on delete set null,
+  reference_rate_family text,
+  reference_rate_tenor_months integer,
+  reference_rate_effective_date date,
+  base_rate_pct numeric(12, 8),
   effective_rate_pct numeric(12, 8),
   calculated_cost numeric(20, 6) not null,
   final_cost numeric(20, 6) not null,
   line_snapshot jsonb not null,
   foreign key (comparison_result_id, user_id)
-    references public.comparison_results(id, user_id) on delete cascade
+    references public.comparison_results(id, user_id) on delete cascade,
+  check (
+    (
+      reference_rate_index_id is null
+      and reference_rate_family is null
+      and reference_rate_tenor_months is null
+      and reference_rate_effective_date is null
+      and base_rate_pct is null
+    )
+    or (
+      reference_rate_index_id is not null
+      and reference_rate_family in ('TERM_SOFR', 'TERM_SHIBOR')
+      and reference_rate_tenor_months in (1, 3, 6, 12)
+      and reference_rate_effective_date is not null
+      and base_rate_pct is not null
+    )
+  )
 );
 
 create index institutions_active_name_idx on public.institutions (active, name);
@@ -339,9 +365,6 @@ create index quotation_issuing_institutions_institution_idx
   on public.quotation_issuing_institutions (institution_id);
 create index pricing_records_version_idx
   on public.pricing_records (quotation_version_id, display_order);
-create index pricing_records_reference_rate_idx
-  on public.pricing_records (reference_rate_index_id)
-  where reference_rate_index_id is not null;
 create index reference_rate_values_lookup_idx
   on public.reference_rate_values (reference_rate_index_id, effective_date desc);
 create index reference_rate_indices_created_by_idx on public.reference_rate_indices (created_by);
@@ -377,6 +400,9 @@ create index comparison_cost_lines_result_idx on public.comparison_cost_lines (c
 create index comparison_cost_lines_pricing_idx
   on public.comparison_cost_lines (pricing_record_id)
   where pricing_record_id is not null;
+create index comparison_cost_lines_reference_rate_idx
+  on public.comparison_cost_lines (reference_rate_index_id)
+  where reference_rate_index_id is not null;
 
 create trigger institutions_set_updated_at
 before update on public.institutions

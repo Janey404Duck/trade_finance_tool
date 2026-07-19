@@ -24,7 +24,7 @@ describe('compareScenario', () => {
                 id: 'citi-discount-unconfirmed',
                 rate: {
                   type: 'referencePlusSpread' as const,
-                  referenceRateIndexId: 'cof',
+                  referenceRateFamily: 'TERM_SOFR' as const,
                   spreadPct: 3,
                 },
               }

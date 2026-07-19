@@ -3,12 +3,17 @@ import type {
   DayCountConvention,
   PricingComponentKind,
   PricingRate,
+  TermReferenceRateFamily,
+  TermReferenceRateTenorMonths,
 } from '../quotation/model';
 import type { ResolvedTimeline } from '../timeline/model';
 
 export type ReferenceRate = {
   indexId: string;
   name: string;
+  family: TermReferenceRateFamily;
+  currency: string;
+  tenorMonths: TermReferenceRateTenorMonths;
   ratePct: number;
   effectiveDate: string;
 };
@@ -29,6 +34,7 @@ export type CostLine = {
   endDay?: number;
   chargeDays?: number;
   rate: PricingRate;
+  referenceRate?: ReferenceRate;
   baseRatePct?: number;
   effectiveRatePct?: number;
   dayCountConvention?: DayCountConvention;

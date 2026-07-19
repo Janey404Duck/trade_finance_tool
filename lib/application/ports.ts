@@ -1,12 +1,19 @@
 import type { ReferenceRate } from '@/lib/domain/cost/model';
-import type { Quotation, QuotationFilter } from '@/lib/domain/quotation/model';
+import type {
+  Quotation,
+  QuotationFilter,
+  TermReferenceRateFamily,
+} from '@/lib/domain/quotation/model';
 
 export interface QuotationRepository {
   findApplicable(filter: QuotationFilter): Promise<Quotation[]>;
 }
 
 export interface ReferenceRateRepository {
-  findAsOf(indexIds: string[], asOfDate: string): Promise<ReferenceRate[]>;
+  findAsOf(
+    families: Array<{ family: TermReferenceRateFamily; currency: string }>,
+    asOfDate: string,
+  ): Promise<ReferenceRate[]>;
 }
 
 export interface ComparisonRepository {

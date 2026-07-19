@@ -48,6 +48,7 @@ export function compareScenario(
       maturityDays,
       issuingInstitutionId: command.issuingInstitutionId,
       asOfDate: command.asOfDate,
+      financing: command.financing,
     },
     command.quotationFilter,
   );

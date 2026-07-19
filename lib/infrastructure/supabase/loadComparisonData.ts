@@ -24,7 +24,7 @@ export async function loadComparisonData(
           id, version, status, valid_from, valid_to,
           pricing:pricing_records(
             id, label, component_kind, pricing_condition, rate_type, fixed_amount,
-            rate_pct, reference_rate_index_id, spread_pct, start_event_name,
+            rate_pct, reference_rate_family, spread_pct, start_event_name,
             end_event_name, day_count_convention, billing_frequency,
             partial_period_rounding, minimum_period_days, minimum_fee_amount,
             include_start_date, include_end_date, display_order
@@ -36,7 +36,9 @@ export async function loadComparisonData(
       .from('reference_rate_values')
       .select(`
         reference_rate_index_id, effective_date, rate_pct,
-        index:reference_rate_indices!reference_rate_values_reference_rate_index_id_fkey(name, active)
+        index:reference_rate_indices!reference_rate_values_reference_rate_index_id_fkey(
+          name, family, currency, tenor_months, active
+        )
       `)
       .lte('effective_date', asOfDate)
       .order('effective_date', { ascending: false }),
@@ -59,6 +61,9 @@ export async function loadComparisonData(
     return [{
       indexId,
       name: text(index.name),
+      family: text(index.family) as 'TERM_SOFR' | 'TERM_SHIBOR',
+      currency: text(index.currency),
+      tenorMonths: number(index.tenor_months) as 1 | 3 | 6 | 12,
       ratePct: number(row.rate_pct),
       effectiveDate: text(row.effective_date),
     }];
@@ -136,7 +141,9 @@ function mapRate(row: Row): PricingRate {
     case 'reference_plus_spread':
       return {
         type: 'referencePlusSpread',
-        referenceRateIndexId: text(row.reference_rate_index_id),
+        referenceRateFamily: text(row.reference_rate_family) as
+          | 'TERM_SOFR'
+          | 'TERM_SHIBOR',
         spreadPct: number(row.spread_pct),
       };
     default:

@@ -39,16 +39,28 @@ insert into public.reference_rate_indices (
   id, name, family, currency, tenor_months
 )
 values
-  ('30000000-0000-0000-0000-000000000001', '12M Term SOFR', 'TERM_SOFR', 'USD', 12),
-  ('30000000-0000-0000-0000-000000000002', 'USD Cost of Funds', 'COF', 'USD', null)
+  ('30000000-0000-0000-0000-000000000001', '1M Term SOFR', 'TERM_SOFR', 'USD', 1),
+  ('30000000-0000-0000-0000-000000000002', '3M Term SOFR', 'TERM_SOFR', 'USD', 3),
+  ('30000000-0000-0000-0000-000000000003', '6M Term SOFR', 'TERM_SOFR', 'USD', 6),
+  ('30000000-0000-0000-0000-000000000004', '12M Term SOFR', 'TERM_SOFR', 'USD', 12),
+  ('30000000-0000-0000-0000-000000000011', '1M SHIBOR', 'TERM_SHIBOR', 'CNY', 1),
+  ('30000000-0000-0000-0000-000000000012', '3M SHIBOR', 'TERM_SHIBOR', 'CNY', 3),
+  ('30000000-0000-0000-0000-000000000013', '6M SHIBOR', 'TERM_SHIBOR', 'CNY', 6),
+  ('30000000-0000-0000-0000-000000000014', '12M SHIBOR', 'TERM_SHIBOR', 'CNY', 12)
 on conflict (family, currency, tenor_months) do update set name = excluded.name, active = true;
 
 insert into public.reference_rate_values (
   id, reference_rate_index_id, effective_date, rate_pct, source
 )
 values
-  ('31000000-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000001', current_date, 3.85, 'Sample seed data'),
-  ('31000000-0000-0000-0000-000000000002', '30000000-0000-0000-0000-000000000002', current_date, 4.20, 'Sample seed data')
+  ('31000000-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000001', current_date, 4.15, 'Sample seed data'),
+  ('31000000-0000-0000-0000-000000000002', '30000000-0000-0000-0000-000000000002', current_date, 4.10, 'Sample seed data'),
+  ('31000000-0000-0000-0000-000000000003', '30000000-0000-0000-0000-000000000003', current_date, 4.00, 'Sample seed data'),
+  ('31000000-0000-0000-0000-000000000004', '30000000-0000-0000-0000-000000000004', current_date, 3.85, 'Sample seed data'),
+  ('31000000-0000-0000-0000-000000000011', '30000000-0000-0000-0000-000000000011', current_date, 1.55, 'Sample seed data'),
+  ('31000000-0000-0000-0000-000000000012', '30000000-0000-0000-0000-000000000012', current_date, 1.60, 'Sample seed data'),
+  ('31000000-0000-0000-0000-000000000013', '30000000-0000-0000-0000-000000000013', current_date, 1.65, 'Sample seed data'),
+  ('31000000-0000-0000-0000-000000000014', '30000000-0000-0000-0000-000000000014', current_date, 1.70, 'Sample seed data')
 on conflict (reference_rate_index_id, effective_date) do update set
   rate_pct = excluded.rate_pct,
   source = excluded.source;
@@ -84,22 +96,22 @@ on conflict (quotation_id, version) do update set
 
 insert into public.pricing_records (
   id, quotation_version_id, label, component_kind, pricing_condition, rate_type,
-  rate_pct, reference_rate_index_id, spread_pct, start_event_name, end_event_name,
+  rate_pct, reference_rate_family, spread_pct, start_event_name, end_event_name,
   day_count_convention, display_order
 )
 values
   ('42000000-0000-0000-0000-000000000001', '41000000-0000-0000-0000-000000000001', 'Confirmation fee', 'confirmation_fee', 'confirmation_required', 'annualized_percentage', 0.90, null, null, 'lc_issuance', 'lc_maturity', 'ACT/360', 10),
-  ('42000000-0000-0000-0000-000000000002', '41000000-0000-0000-0000-000000000001', 'Discounting with confirmation', 'discounting', 'confirmation_required', 'reference_plus_spread', null, '30000000-0000-0000-0000-000000000001', 0.60, 'supplier_payment', 'lc_maturity', 'ACT/360', 20),
-  ('42000000-0000-0000-0000-000000000003', '41000000-0000-0000-0000-000000000001', 'Discounting without confirmation', 'discounting', 'confirmation_not_required', 'reference_plus_spread', null, '30000000-0000-0000-0000-000000000002', 4.00, 'supplier_payment', 'lc_maturity', 'ACT/360', 30),
+  ('42000000-0000-0000-0000-000000000002', '41000000-0000-0000-0000-000000000001', 'Discounting with confirmation', 'discounting', 'confirmation_required', 'reference_plus_spread', null, 'TERM_SOFR', 0.60, 'supplier_payment', 'lc_maturity', 'ACT/360', 20),
+  ('42000000-0000-0000-0000-000000000003', '41000000-0000-0000-0000-000000000001', 'Discounting without confirmation', 'discounting', 'confirmation_not_required', 'reference_plus_spread', null, 'TERM_SOFR', 4.00, 'supplier_payment', 'lc_maturity', 'ACT/360', 30),
   ('42000000-0000-0000-0000-000000000004', '41000000-0000-0000-0000-000000000002', 'Confirmation fee', 'confirmation_fee', 'confirmation_required', 'annualized_percentage', 1.00, null, null, 'lc_issuance', 'lc_maturity', 'ACT/360', 10),
-  ('42000000-0000-0000-0000-000000000005', '41000000-0000-0000-0000-000000000002', 'Discounting with confirmation', 'discounting', 'confirmation_required', 'reference_plus_spread', null, '30000000-0000-0000-0000-000000000001', 0.50, 'supplier_payment', 'lc_maturity', 'ACT/360', 20),
-  ('42000000-0000-0000-0000-000000000006', '41000000-0000-0000-0000-000000000002', 'Discounting without confirmation', 'discounting', 'confirmation_not_required', 'reference_plus_spread', null, '30000000-0000-0000-0000-000000000002', 3.80, 'supplier_payment', 'lc_maturity', 'ACT/360', 30)
+  ('42000000-0000-0000-0000-000000000005', '41000000-0000-0000-0000-000000000002', 'Discounting with confirmation', 'discounting', 'confirmation_required', 'reference_plus_spread', null, 'TERM_SOFR', 0.50, 'supplier_payment', 'lc_maturity', 'ACT/360', 20),
+  ('42000000-0000-0000-0000-000000000006', '41000000-0000-0000-0000-000000000002', 'Discounting without confirmation', 'discounting', 'confirmation_not_required', 'reference_plus_spread', null, 'TERM_SOFR', 3.80, 'supplier_payment', 'lc_maturity', 'ACT/360', 30)
 on conflict (id) do update set
   label = excluded.label,
   pricing_condition = excluded.pricing_condition,
   rate_type = excluded.rate_type,
   rate_pct = excluded.rate_pct,
-  reference_rate_index_id = excluded.reference_rate_index_id,
+  reference_rate_family = excluded.reference_rate_family,
   spread_pct = excluded.spread_pct,
   start_event_name = excluded.start_event_name,
   end_event_name = excluded.end_event_name,

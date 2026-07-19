@@ -3,7 +3,10 @@ import type {
   PricingRecord,
   Quotation,
   QuotationVersion,
+  TermReferenceRateFamily,
+  TermReferenceRateTenorMonths,
 } from '../quotation/model';
+import { findMissingPricingCoverage } from '../quotation/pricingCoverage';
 import type {
   CostCalculationContext,
   CostLine,
@@ -16,6 +19,15 @@ export function calculateQuotationCost(
   context: CostCalculationContext,
 ): QuotationCost {
   assertValidFinancingSelection(context.financing);
+  const missingPricing = findMissingPricingCoverage(
+    version.pricing,
+    context.financing,
+  );
+  if (missingPricing.length > 0) {
+    throw new Error(
+      `Quotation "${quotation.reference}" is ineligible: missing ${missingPricing.join(', ')}.`,
+    );
+  }
   const applicableRecords = version.pricing.filter((record) =>
     appliesToSelection(record, context),
   );
@@ -74,10 +86,12 @@ function calculateLine(
         (record.includeEndDate === false ? 1 : 0)
       : period.chargeDays;
   const effectiveDays = resolveBillingDays(record, conventionDays);
-  const { calculatedCost, baseRatePct, effectiveRatePct } = calculateBaseCost(
+  const { calculatedCost, referenceRate, baseRatePct, effectiveRatePct } =
+    calculateBaseCost(
     record,
     context,
     effectiveDays,
+    period.chargeDays,
   );
   const finalCost = Math.max(calculatedCost, record.minimumFeeAmount ?? 0);
 
@@ -89,6 +103,7 @@ function calculateLine(
     endDay: period.end?.day,
     chargeDays: effectiveDays,
     rate: record.rate,
+    referenceRate,
     baseRatePct,
     effectiveRatePct,
     dayCountConvention: record.dayCountConvention,
@@ -138,6 +153,7 @@ function calculateBaseCost(
   record: PricingRecord,
   context: CostCalculationContext,
   chargeDays?: number,
+  financingPeriodDays?: number,
 ) {
   switch (record.rate.type) {
     case 'fixedAmount':
@@ -158,11 +174,23 @@ function calculateBaseCost(
       };
     case 'referencePlusSpread': {
       const rate = record.rate;
+      if (financingPeriodDays == null) {
+        throw new Error(
+          `Term reference-rate pricing record "${record.label}" requires a financing period.`,
+        );
+      }
+      assertFamilyMatchesCurrency(rate.referenceRateFamily, context.currency);
+      const tenorMonths = resolveTermRateTenorMonths(financingPeriodDays);
       const reference = context.referenceRates.find(
-        (candidate) => candidate.indexId === rate.referenceRateIndexId,
+        (candidate) =>
+          candidate.family === rate.referenceRateFamily &&
+          candidate.currency.toUpperCase() === context.currency.toUpperCase() &&
+          candidate.tenorMonths === tenorMonths,
       );
       if (!reference) {
-        throw new Error(`Reference rate "${rate.referenceRateIndexId}" is unavailable.`);
+        throw new Error(
+          `${tenorMonths}M ${rate.referenceRateFamily} is unavailable for ${context.currency.toUpperCase()}.`,
+        );
       }
       const effectiveRatePct = reference.ratePct + rate.spreadPct;
       return {
@@ -173,8 +201,47 @@ function calculateBaseCost(
           dayCountFraction(record, chargeDays),
         baseRatePct: reference.ratePct,
         effectiveRatePct,
+        referenceRate: reference,
       };
     }
+  }
+}
+
+export function resolveTermRateTenorMonths(
+  periodDays: number,
+): TermReferenceRateTenorMonths {
+  if (!Number.isInteger(periodDays) || periodDays < 0) {
+    throw new Error('The financing period must be a nonnegative whole number of days.');
+  }
+  if (periodDays <= 30) return 1;
+  if (periodDays <= 90) return 3;
+  if (periodDays <= 180) return 6;
+  if (periodDays <= 360) return 12;
+  throw new Error(
+    `No supported term-rate tenor covers a ${periodDays}-day financing period.`,
+  );
+}
+
+function assertFamilyMatchesCurrency(
+  family: TermReferenceRateFamily,
+  currency: string,
+): void {
+  const normalizedCurrency = currency.toUpperCase();
+  const expectedFamily =
+    normalizedCurrency === 'USD'
+      ? 'TERM_SOFR'
+      : normalizedCurrency === 'CNY'
+        ? 'TERM_SHIBOR'
+        : undefined;
+  if (!expectedFamily) {
+    throw new Error(
+      `No term reference-rate family is configured for ${normalizedCurrency}.`,
+    );
+  }
+  if (family !== expectedFamily) {
+    throw new Error(
+      `${family} cannot price a ${normalizedCurrency} quotation; expected ${expectedFamily}.`,
+    );
   }
 }
 
