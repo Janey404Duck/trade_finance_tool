@@ -1,48 +1,35 @@
-import type { FinancingSelection } from '../financing/model';
-import type {
-  PricingComponentKind,
-  PricingCondition,
-  PricingRecord,
-} from './model';
+import { hasComponent, type ComparisonCase } from '../financing/model';
+import type { PricingComponentKind, PricingRecord } from './model';
+import { pricingRecordApplies } from './model';
 
 export function findMissingPricingCoverage(
   pricing: PricingRecord[],
-  selection: FinancingSelection,
+  comparisonCase: ComparisonCase,
 ): string[] {
   const missing: string[] = [];
 
   if (
-    selection.confirmationRequired &&
-    !hasApplicableComponent(pricing, 'confirmationFee', true)
+    hasComponent(comparisonCase, 'confirmation') &&
+    !hasUsableCoreComponent(pricing, 'confirmationFee', comparisonCase)
   ) {
     missing.push('confirmation pricing');
   }
   if (
-    selection.discounting &&
-    !hasApplicableComponent(
-      pricing,
-      'discounting',
-      selection.confirmationRequired,
-      true,
-    )
+    hasComponent(comparisonCase, 'discounting') &&
+    !hasUsableCoreComponent(pricing, 'discounting', comparisonCase, true)
   ) {
     missing.push(
-      selection.confirmationRequired
+      hasComponent(comparisonCase, 'confirmation')
         ? 'discounting pricing with confirmation'
         : 'discounting pricing without confirmation',
     );
   }
   if (
-    selection.forfaiting &&
-    !hasApplicableComponent(
-      pricing,
-      'forfaiting',
-      selection.confirmationRequired,
-      true,
-    )
+    hasComponent(comparisonCase, 'forfaiting') &&
+    !hasUsableCoreComponent(pricing, 'forfaiting', comparisonCase, true)
   ) {
     missing.push(
-      selection.confirmationRequired
+      hasComponent(comparisonCase, 'confirmation')
         ? 'forfaiting pricing with confirmation'
         : 'forfaiting pricing without confirmation',
     );
@@ -53,32 +40,30 @@ export function findMissingPricingCoverage(
 
 export function hasPricingCoverage(
   pricing: PricingRecord[],
-  selection: FinancingSelection,
+  comparisonCase: ComparisonCase,
 ): boolean {
-  return findMissingPricingCoverage(pricing, selection).length === 0;
+  return findMissingPricingCoverage(pricing, comparisonCase).length === 0;
 }
 
-function hasApplicableComponent(
+function hasUsableCoreComponent(
   pricing: PricingRecord[],
   kind: PricingComponentKind,
-  confirmationRequired: boolean,
+  comparisonCase: ComparisonCase,
   requireTermReferenceRate = false,
 ): boolean {
-  return pricing.some(
-    (record) =>
-      record.kind === kind &&
-      conditionMatches(record.condition, confirmationRequired) &&
-      (!requireTermReferenceRate || record.rate.type === 'referencePlusSpread'),
-  );
-}
-
-function conditionMatches(
-  condition: PricingCondition,
-  confirmationRequired: boolean,
-): boolean {
-  return (
-    condition === 'always' ||
-    (condition === 'confirmationRequired' && confirmationRequired) ||
-    (condition === 'confirmationNotRequired' && !confirmationRequired)
-  );
+  return pricing.some((record) => {
+    if (
+      record.kind !== kind ||
+      record.inclusionMode !== 'automatic' ||
+      record.disclosureStatus === 'notApplicable' ||
+      !pricingRecordApplies(record, comparisonCase)
+    ) {
+      return false;
+    }
+    if (record.disclosureStatus === 'waived') return true;
+    return (
+      record.rate != null &&
+      (!requireTermReferenceRate || record.rate.type === 'referencePlusSpread')
+    );
+  });
 }

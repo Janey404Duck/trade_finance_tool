@@ -34,29 +34,67 @@ export default function ComparePage() {
 
       <section className="card stack">
         <div>
-          <h2>2. Financing selection</h2>
-          <p>Confirmation and early-payment financing are separate dimensions.</p>
+          <h2>2. Comparison cases</h2>
+          <p>Select any cases to compare. Every case uses the same transaction and timeline.</p>
         </div>
         <div className="choice-grid">
           <div className="choice">
-            <label><input type="checkbox" /> Confirmation required</label>
-            <p>Applies the confirmation fee and exposure period.</p>
+            <label><input defaultChecked name="comparisonCases" type="checkbox" value="confirmation" /> Confirmation only</label>
+            <p>One result containing all applicable confirmation-period fees.</p>
           </div>
           <div className="choice">
-            <label><input type="checkbox" /> Discounting</label>
-            <p>Uses the matching with- or without-confirmation pricing record.</p>
+            <label><input defaultChecked name="comparisonCases" type="checkbox" value="confirmation-discounting" /> Confirmation + discounting</label>
+            <p>Both components are calculated together in one transaction result.</p>
           </div>
           <div className="choice">
-            <label><input type="checkbox" /> Forfaiting</label>
-            <p>Alternative early-payment financing selection.</p>
+            <label><input name="comparisonCases" type="checkbox" value="discounting" /> Discounting only</label>
+            <p>Uses only a rate explicitly quoted for the unconfirmed case.</p>
+          </div>
+          <div className="choice">
+            <label><input name="comparisonCases" type="checkbox" value="forfaiting" /> Forfaiting</label>
+            <p>Compared as an alternative early-payment case.</p>
           </div>
         </div>
       </section>
 
       <section className="card stack">
+        <div>
+          <h2>3. Fee comparison</h2>
+          <p>Choose the comparison basis, then include conditional events if relevant.</p>
+        </div>
+        <div className="choice-grid">
+          <div className="choice">
+            <label><input defaultChecked name="comparisonMode" type="radio" value="coreFeesOnly" /> Core fees only</label>
+            <p>Issuing, confirmation, deferred-payment, discounting, and forfaiting fees only.</p>
+          </div>
+          <div className="choice">
+            <label><input name="comparisonMode" type="radio" value="allAvailableFees" /> All available fees</label>
+            <p>Adds disclosed administrative fees and flags incomplete fee coverage.</p>
+          </div>
+        </div>
+        <div className="choice-grid">
+          <div className="choice">
+            <label>
+              <input name="includedConditionalFeeKinds" type="checkbox" value="discrepancyFee" />
+              Include discrepancy fee
+            </label>
+            <p>Includes a disclosed discrepancy charge; missing disclosure is shown as incomplete.</p>
+          </div>
+          <div className="choice">
+            <label>
+              <input name="includedConditionalFeeKinds" type="checkbox" value="amendmentFee" />
+              Include amendment fee
+            </label>
+            <p>Applies issuing- or confirming-bank amendment fees only to relevant cases.</p>
+          </div>
+        </div>
+        <div className="muted-box">Negotiation, SWIFT, advising, handling, amendment, and discrepancy are administrative fees. “Not provided” is never treated as zero; waived and not applicable must be stated explicitly.</div>
+      </section>
+
+      <section className="card stack">
         <div className="section-header">
           <div>
-            <h2>3. Resolved timeline</h2>
+            <h2>4. Resolved timeline</h2>
             <p>Business relationships are resolved into Day 0 coordinates.</p>
           </div>
           <button className="button button-secondary" type="button">Edit timing</button>
@@ -70,7 +108,7 @@ export default function ComparePage() {
 
       <section className="card stack">
         <div>
-          <h2>4. Quotation selection</h2>
+          <h2>5. Quotation selection</h2>
           <p>Filter by institution first, then choose human-readable quotation references.</p>
         </div>
         <div className="form-grid">

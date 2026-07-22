@@ -3,6 +3,23 @@
 
 drop function if exists public.persist_calculation(jsonb);
 
+drop table if exists public.comparison_cost_lines cascade;
+drop table if exists public.comparison_results cascade;
+drop table if exists public.comparison_runs cascade;
+drop table if exists public.scenario_events cascade;
+drop table if exists public.scenario_comparison_cases cascade;
+drop table if exists public.trade_scenarios cascade;
+drop table if exists public.reference_rate_values cascade;
+drop table if exists public.reference_rate_indices cascade;
+drop table if exists public.reference_rates cascade;
+drop table if exists public.fee_records cascade;
+drop table if exists public.pricing_records cascade;
+drop table if exists public.institution_fee_schedules cascade;
+drop table if exists public.quotation_issuing_institutions cascade;
+drop table if exists public.quotation_versions cascade;
+drop table if exists public.quotations cascade;
+drop table if exists public.trade_template_events cascade;
+drop table if exists public.trade_templates cascade;
 drop table if exists public.calculation_component_periods cascade;
 drop table if exists public.calculation_issuing_fee_periods cascade;
 drop table if exists public.calculation_result_lines cascade;
@@ -10,9 +27,6 @@ drop table if exists public.calculation_results cascade;
 drop table if exists public.calculation_runs cascade;
 drop table if exists public.issuing_bank_fee_rules cascade;
 drop table if exists public.migration_review_items cascade;
-drop table if exists public.reference_rate_values cascade;
-drop table if exists public.reference_rate_indices cascade;
-drop table if exists public.reference_rates cascade;
 drop table if exists public.quote_charge_rules cascade;
 drop table if exists public.quote_components cascade;
 drop table if exists public.quote_package_issuing_banks cascade;
@@ -45,16 +59,14 @@ drop function if exists public.current_user_role();
 create schema if not exists private;
 revoke all on schema private from public;
 
-create function private.current_user_role()
+create or replace function private.current_user_role()
 returns public.user_role
 language sql
 stable
 security definer
 set search_path = ''
 as $$
-  select role
-  from public.profiles
-  where id = (select auth.uid());
+  select role from public.profiles where id = (select auth.uid());
 $$;
 
 revoke all on function private.current_user_role() from public;
@@ -154,20 +166,47 @@ create table public.quotation_issuing_institutions (
   primary key (quotation_id, institution_id)
 );
 
-create table public.pricing_records (
+create table public.institution_fee_schedules (
   id uuid primary key default gen_random_uuid(),
-  quotation_version_id uuid not null references public.quotation_versions(id) on delete cascade,
+  institution_id uuid not null references public.institutions(id) on delete cascade,
+  currency text not null check (currency ~ '^[A-Z]{3}$'),
+  institution_role text not null check (institution_role in (
+    'issuing_bank', 'confirming_bank', 'advising_bank', 'negotiating_bank', 'financing_provider'
+  )),
+  status text not null check (status in ('draft', 'active', 'superseded', 'withdrawn')),
+  valid_from date not null,
+  valid_to date,
+  notes text,
+  created_by uuid references public.profiles(id) on delete set null,
+  created_at timestamptz not null default now(),
+  check (valid_to is null or valid_to >= valid_from)
+);
+
+create table public.fee_records (
+  id uuid primary key default gen_random_uuid(),
+  quotation_version_id uuid references public.quotation_versions(id) on delete cascade,
+  institution_fee_schedule_id uuid references public.institution_fee_schedules(id) on delete cascade,
+  fee_code text not null check (fee_code ~ '^[a-z0-9][a-z0-9_-]*$'),
   label text not null,
-  component_kind text not null
-    check (component_kind in ('instrument_fee', 'confirmation_fee', 'discounting', 'forfaiting')),
-  pricing_condition text not null default 'always'
-    check (pricing_condition in ('always', 'confirmation_required', 'confirmation_not_required')),
-  rate_type text not null
-    check (rate_type in ('fixed_amount', 'flat_percentage', 'annualized_percentage', 'reference_plus_spread')),
+  component_kind text not null check (component_kind in (
+    'issuing_fee', 'confirmation_fee', 'deferred_payment_fee', 'discounting', 'forfaiting',
+    'advising_fee', 'negotiation_fee', 'amendment_fee', 'swift_fee',
+    'discrepancy_fee', 'handling_fee', 'other_administrative_fee'
+  )),
+  disclosure_status text not null check (disclosure_status in ('priced', 'waived', 'not_applicable')),
+  inclusion_mode text not null default 'automatic' check (inclusion_mode in ('automatic', 'conditional')),
+  charged_by_institution_id uuid not null references public.institutions(id) on delete restrict,
+  charged_by_role text not null check (charged_by_role in (
+    'issuing_bank', 'confirming_bank', 'advising_bank', 'negotiating_bank', 'financing_provider'
+  )),
+  required_components text[] not null default '{}'::text[],
+  excluded_components text[] not null default '{}'::text[],
+  rate_type text check (rate_type in (
+    'fixed_amount', 'flat_percentage', 'annualized_percentage', 'reference_plus_spread'
+  )),
   fixed_amount numeric(20, 6),
   rate_pct numeric(12, 8),
-  reference_rate_family text
-    check (reference_rate_family in ('TERM_SOFR', 'TERM_SHIBOR')),
+  reference_rate_family text check (reference_rate_family in ('TERM_SOFR', 'TERM_SHIBOR')),
   spread_pct numeric(12, 8),
   start_event_name text check (start_event_name in (
     'trade_start', 'purchase_order', 'lc_issuance', 'shipment', 'invoice',
@@ -178,23 +217,37 @@ create table public.pricing_records (
     'presentation', 'acceptance', 'supplier_payment', 'negotiation', 'lc_maturity'
   )),
   day_count_convention text check (day_count_convention in ('ACT/360', 'ACT/365', '30/360')),
-  billing_frequency text not null default 'once'
-    check (billing_frequency in ('once', 'monthly', 'quarterly')),
-  partial_period_rounding text not null default 'actual'
-    check (partial_period_rounding in ('actual', 'up')),
+  billing_frequency text not null default 'once' check (billing_frequency in ('once', 'monthly', 'quarterly')),
+  partial_period_rounding text not null default 'actual' check (partial_period_rounding in ('actual', 'up')),
   minimum_period_days integer check (minimum_period_days is null or minimum_period_days >= 0),
   minimum_fee_amount numeric(20, 6) check (minimum_fee_amount is null or minimum_fee_amount >= 0),
   include_start_date boolean not null default false,
   include_end_date boolean not null default true,
   display_order integer not null default 0,
   notes text,
+  check ((quotation_version_id is null) <> (institution_fee_schedule_id is null)),
   check ((start_event_name is null) = (end_event_name is null)),
+  check (required_components <@ array['confirmation', 'discounting', 'forfaiting']::text[]),
+  check (excluded_components <@ array['confirmation', 'discounting', 'forfaiting']::text[]),
+  check (not (required_components && excluded_components)),
   check (
-    component_kind not in ('discounting', 'forfaiting')
+    inclusion_mode = 'automatic'
+    or component_kind in (
+      'advising_fee', 'negotiation_fee', 'amendment_fee', 'swift_fee',
+      'discrepancy_fee', 'handling_fee', 'other_administrative_fee'
+    )
+  ),
+  check (
+    disclosure_status <> 'priced'
+    or component_kind not in ('discounting', 'forfaiting')
     or rate_type = 'reference_plus_spread'
   ),
   check (
-    (rate_type = 'fixed_amount' and fixed_amount is not null and rate_pct is null and reference_rate_family is null and spread_pct is null)
+    disclosure_status <> 'priced' or rate_type is not null
+  ),
+  check (
+    (rate_type is null and fixed_amount is null and rate_pct is null and reference_rate_family is null and spread_pct is null)
+    or (rate_type = 'fixed_amount' and fixed_amount is not null and rate_pct is null and reference_rate_family is null and spread_pct is null)
     or (rate_type in ('flat_percentage', 'annualized_percentage') and rate_pct is not null and fixed_amount is null and reference_rate_family is null and spread_pct is null)
     or (rate_type = 'reference_plus_spread' and reference_rate_family is not null and spread_pct is not null and fixed_amount is null and rate_pct is null)
   )
@@ -239,13 +292,32 @@ create table public.trade_scenarios (
   currency text not null check (currency ~ '^[A-Z]{3}$'),
   issuing_institution_id uuid references public.institutions(id) on delete restrict,
   trade_start_date date not null,
-  confirmation_required boolean not null default false,
-  discounting boolean not null default false,
-  forfaiting boolean not null default false,
+  comparison_mode text not null default 'core_fees_only'
+    check (comparison_mode in ('core_fees_only', 'all_available_fees')),
+  included_conditional_fee_kinds text[] not null default '{}'::text[]
+    check (included_conditional_fee_kinds <@ array[
+      'advising_fee', 'negotiation_fee', 'amendment_fee', 'swift_fee',
+      'discrepancy_fee', 'handling_fee', 'other_administrative_fee'
+    ]::text[]),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  unique (id, user_id),
-  check (not (discounting and forfaiting))
+  unique (id, user_id)
+);
+
+create table public.scenario_comparison_cases (
+  id uuid primary key default gen_random_uuid(),
+  trade_scenario_id uuid not null,
+  user_id uuid not null,
+  case_reference text not null,
+  label text not null,
+  components text[] not null,
+  display_order integer not null default 0,
+  foreign key (trade_scenario_id, user_id)
+    references public.trade_scenarios(id, user_id) on delete cascade,
+  unique (trade_scenario_id, case_reference),
+  check (cardinality(components) > 0),
+  check (components <@ array['confirmation', 'discounting', 'forfaiting']::text[]),
+  check (not (components @> array['discounting', 'forfaiting']::text[]))
 );
 
 create table public.scenario_events (
@@ -280,6 +352,7 @@ create table public.comparison_runs (
   user_id uuid not null references public.profiles(id) on delete cascade,
   trade_scenario_id uuid,
   as_of_date date not null,
+  comparison_mode text not null check (comparison_mode in ('core_fees_only', 'all_available_fees')),
   scenario_snapshot jsonb not null,
   resolved_timeline jsonb not null,
   created_at timestamptz not null default now(),
@@ -296,24 +369,54 @@ create table public.comparison_results (
   quotation_version_id uuid references public.quotation_versions(id) on delete set null,
   quotation_reference text not null,
   institution_name text not null,
-  instrument_cost numeric(20, 6) not null,
-  confirmation_cost numeric(20, 6) not null,
-  financing_cost numeric(20, 6) not null,
-  total_cost numeric(20, 6) not null,
-  all_in_pct numeric(12, 8) not null,
+  comparison_case_reference text not null,
+  comparison_case_label text not null,
+  selected_components text[] not null,
+  eligible boolean not null,
+  ineligibility_reasons text[] not null default '{}'::text[],
+  coverage_status text check (coverage_status in ('complete', 'incomplete')),
+  missing_administrative_fee_slots jsonb,
+  core_cost numeric(20, 6),
+  administrative_cost numeric(20, 6),
+  confirmation_cost numeric(20, 6),
+  deferred_payment_cost numeric(20, 6),
+  financing_cost numeric(20, 6),
+  total_cost numeric(20, 6),
+  all_in_pct numeric(12, 8),
   result_snapshot jsonb not null,
   foreign key (comparison_run_id, user_id)
     references public.comparison_runs(id, user_id) on delete cascade,
-  unique (id, user_id)
+  unique (id, user_id),
+  check (selected_components <@ array['confirmation', 'discounting', 'forfaiting']::text[]),
+  check (
+    (eligible and cardinality(ineligibility_reasons) = 0 and coverage_status is not null
+      and core_cost is not null and administrative_cost is not null and total_cost is not null and all_in_pct is not null)
+    or
+    (not eligible and cardinality(ineligibility_reasons) > 0 and coverage_status is null
+      and core_cost is null and administrative_cost is null and total_cost is null and all_in_pct is null)
+  )
 );
 
 create table public.comparison_cost_lines (
   id uuid primary key default gen_random_uuid(),
   comparison_result_id uuid not null,
   user_id uuid not null,
-  pricing_record_id uuid references public.pricing_records(id) on delete set null,
+  fee_record_id uuid references public.fee_records(id) on delete set null,
+  fee_code text not null,
   label text not null,
-  component_kind text not null,
+  component_kind text not null check (component_kind in (
+    'issuing_fee', 'confirmation_fee', 'deferred_payment_fee', 'discounting', 'forfaiting',
+    'advising_fee', 'negotiation_fee', 'amendment_fee', 'swift_fee',
+    'discrepancy_fee', 'handling_fee', 'other_administrative_fee'
+  )),
+  disclosure_status text not null check (disclosure_status in ('priced', 'waived', 'not_applicable')),
+  inclusion_mode text not null check (inclusion_mode in ('automatic', 'conditional')),
+  charged_by_institution_id uuid references public.institutions(id) on delete set null,
+  charged_by_role text not null check (charged_by_role in (
+    'issuing_bank', 'confirming_bank', 'advising_bank', 'negotiating_bank', 'financing_provider'
+  )),
+  fee_source text not null check (fee_source in ('quotation', 'institution_schedule')),
+  fee_source_id uuid,
   start_day integer,
   end_day integer,
   charge_days integer,
@@ -329,20 +432,12 @@ create table public.comparison_cost_lines (
   foreign key (comparison_result_id, user_id)
     references public.comparison_results(id, user_id) on delete cascade,
   check (
-    (
-      reference_rate_index_id is null
-      and reference_rate_family is null
-      and reference_rate_tenor_months is null
-      and reference_rate_effective_date is null
-      and base_rate_pct is null
-    )
-    or (
-      reference_rate_index_id is not null
-      and reference_rate_family in ('TERM_SOFR', 'TERM_SHIBOR')
+    (reference_rate_index_id is null and reference_rate_family is null
+      and reference_rate_tenor_months is null and reference_rate_effective_date is null and base_rate_pct is null)
+    or
+    (reference_rate_index_id is not null and reference_rate_family in ('TERM_SOFR', 'TERM_SHIBOR')
       and reference_rate_tenor_months in (1, 3, 6, 12)
-      and reference_rate_effective_date is not null
-      and base_rate_pct is not null
-    )
+      and reference_rate_effective_date is not null and base_rate_pct is not null)
   )
 );
 
@@ -358,66 +453,46 @@ create index quotations_created_by_idx on public.quotations (created_by);
 create index quotations_updated_by_idx on public.quotations (updated_by);
 create index quotation_versions_quotation_idx on public.quotation_versions (quotation_id);
 create index quotation_versions_created_by_idx on public.quotation_versions (created_by);
-create index quotation_versions_active_idx
-  on public.quotation_versions (quotation_id, valid_from desc, version desc)
-  where status = 'active';
-create index quotation_issuing_institutions_institution_idx
-  on public.quotation_issuing_institutions (institution_id);
-create index pricing_records_version_idx
-  on public.pricing_records (quotation_version_id, display_order);
-create index reference_rate_values_lookup_idx
-  on public.reference_rate_values (reference_rate_index_id, effective_date desc);
+create index quotation_versions_active_idx on public.quotation_versions (quotation_id, valid_from desc, version desc) where status = 'active';
+create index quotation_issuing_institutions_institution_idx on public.quotation_issuing_institutions (institution_id);
+create index institution_fee_schedules_institution_idx on public.institution_fee_schedules (institution_id, currency, institution_role);
+create index institution_fee_schedules_created_by_idx on public.institution_fee_schedules (created_by);
+create index institution_fee_schedules_active_idx on public.institution_fee_schedules (institution_id, currency, valid_from desc) where status = 'active';
+create index fee_records_version_idx on public.fee_records (quotation_version_id, display_order) where quotation_version_id is not null;
+create index fee_records_schedule_idx on public.fee_records (institution_fee_schedule_id, display_order) where institution_fee_schedule_id is not null;
+create index fee_records_charged_by_idx on public.fee_records (charged_by_institution_id);
 create index reference_rate_indices_created_by_idx on public.reference_rate_indices (created_by);
 create index reference_rate_indices_updated_by_idx on public.reference_rate_indices (updated_by);
+create index reference_rate_values_lookup_idx on public.reference_rate_values (reference_rate_index_id, effective_date desc);
 create index reference_rate_values_created_by_idx on public.reference_rate_values (created_by);
 create index trade_scenarios_user_idx on public.trade_scenarios (user_id, created_at desc);
-create index trade_scenarios_template_idx
-  on public.trade_scenarios (trade_template_id)
-  where trade_template_id is not null;
-create index trade_scenarios_issuer_idx
-  on public.trade_scenarios (issuing_institution_id)
-  where issuing_institution_id is not null;
-create index scenario_events_scenario_user_idx
-  on public.scenario_events (trade_scenario_id, user_id);
+create index trade_scenarios_template_idx on public.trade_scenarios (trade_template_id) where trade_template_id is not null;
+create index trade_scenarios_issuer_idx on public.trade_scenarios (issuing_institution_id) where issuing_institution_id is not null;
+create index scenario_comparison_cases_scenario_user_idx on public.scenario_comparison_cases (trade_scenario_id, user_id);
+create index scenario_comparison_cases_user_idx on public.scenario_comparison_cases (user_id);
+create index scenario_events_scenario_user_idx on public.scenario_events (trade_scenario_id, user_id);
 create index scenario_events_user_idx on public.scenario_events (user_id);
 create index comparison_runs_user_idx on public.comparison_runs (user_id, created_at desc);
-create index comparison_runs_scenario_idx
-  on public.comparison_runs (trade_scenario_id)
-  where trade_scenario_id is not null;
-create index comparison_runs_scenario_user_idx
-  on public.comparison_runs (trade_scenario_id, user_id)
-  where trade_scenario_id is not null;
+create index comparison_runs_scenario_user_idx on public.comparison_runs (trade_scenario_id, user_id) where trade_scenario_id is not null;
 create index comparison_results_user_idx on public.comparison_results (user_id);
 create index comparison_results_run_idx on public.comparison_results (comparison_run_id);
-create index comparison_results_quotation_idx
-  on public.comparison_results (quotation_id)
-  where quotation_id is not null;
-create index comparison_results_version_idx
-  on public.comparison_results (quotation_version_id)
-  where quotation_version_id is not null;
+create index comparison_results_quotation_idx on public.comparison_results (quotation_id) where quotation_id is not null;
+create index comparison_results_version_idx on public.comparison_results (quotation_version_id) where quotation_version_id is not null;
 create index comparison_cost_lines_user_idx on public.comparison_cost_lines (user_id);
 create index comparison_cost_lines_result_idx on public.comparison_cost_lines (comparison_result_id);
-create index comparison_cost_lines_pricing_idx
-  on public.comparison_cost_lines (pricing_record_id)
-  where pricing_record_id is not null;
-create index comparison_cost_lines_reference_rate_idx
-  on public.comparison_cost_lines (reference_rate_index_id)
-  where reference_rate_index_id is not null;
+create index comparison_cost_lines_fee_record_idx on public.comparison_cost_lines (fee_record_id) where fee_record_id is not null;
+create index comparison_cost_lines_charged_by_idx on public.comparison_cost_lines (charged_by_institution_id) where charged_by_institution_id is not null;
+create index comparison_cost_lines_reference_rate_idx on public.comparison_cost_lines (reference_rate_index_id) where reference_rate_index_id is not null;
 
-create trigger institutions_set_updated_at
-before update on public.institutions
+create trigger institutions_set_updated_at before update on public.institutions
 for each row execute function public.set_updated_at();
-create trigger trade_templates_set_updated_at
-before update on public.trade_templates
+create trigger trade_templates_set_updated_at before update on public.trade_templates
 for each row execute function public.set_updated_at();
-create trigger quotations_set_updated_at
-before update on public.quotations
+create trigger quotations_set_updated_at before update on public.quotations
 for each row execute function public.set_updated_at();
-create trigger reference_rate_indices_set_updated_at
-before update on public.reference_rate_indices
+create trigger reference_rate_indices_set_updated_at before update on public.reference_rate_indices
 for each row execute function public.set_updated_at();
-create trigger trade_scenarios_set_updated_at
-before update on public.trade_scenarios
+create trigger trade_scenarios_set_updated_at before update on public.trade_scenarios
 for each row execute function public.set_updated_at();
 
 alter table public.institutions enable row level security;
@@ -426,79 +501,44 @@ alter table public.trade_template_events enable row level security;
 alter table public.quotations enable row level security;
 alter table public.quotation_versions enable row level security;
 alter table public.quotation_issuing_institutions enable row level security;
-alter table public.pricing_records enable row level security;
+alter table public.institution_fee_schedules enable row level security;
+alter table public.fee_records enable row level security;
 alter table public.reference_rate_indices enable row level security;
 alter table public.reference_rate_values enable row level security;
 alter table public.trade_scenarios enable row level security;
+alter table public.scenario_comparison_cases enable row level security;
 alter table public.scenario_events enable row level security;
 alter table public.comparison_runs enable row level security;
 alter table public.comparison_results enable row level security;
 alter table public.comparison_cost_lines enable row level security;
 
 do $$
-declare
-  table_name text;
+declare table_name text;
 begin
   foreach table_name in array array[
-    'institutions',
-    'trade_templates',
-    'trade_template_events',
-    'quotations',
-    'quotation_versions',
-    'quotation_issuing_institutions',
-    'pricing_records',
-    'reference_rate_indices',
-    'reference_rate_values'
-  ]
-  loop
-    execute format(
-      'create policy "Authenticated users can read %1$s" on public.%1$I for select to authenticated using (true)',
-      table_name
-    );
-    execute format(
-      'create policy "Editors can insert %1$s" on public.%1$I for insert to authenticated with check ((select private.current_user_role()) in (''admin'', ''editor''))',
-      table_name
-    );
-    execute format(
-      'create policy "Editors can update %1$s" on public.%1$I for update to authenticated using ((select private.current_user_role()) in (''admin'', ''editor'')) with check ((select private.current_user_role()) in (''admin'', ''editor''))',
-      table_name
-    );
-    execute format(
-      'create policy "Admins can delete %1$s" on public.%1$I for delete to authenticated using ((select private.current_user_role()) = ''admin'')',
-      table_name
-    );
+    'institutions', 'trade_templates', 'trade_template_events', 'quotations',
+    'quotation_versions', 'quotation_issuing_institutions', 'institution_fee_schedules',
+    'fee_records', 'reference_rate_indices', 'reference_rate_values'
+  ] loop
+    execute format('create policy "Authenticated users can read %1$s" on public.%1$I for select to authenticated using (true)', table_name);
+    execute format('create policy "Editors can insert %1$s" on public.%1$I for insert to authenticated with check ((select private.current_user_role()) in (''admin'', ''editor''))', table_name);
+    execute format('create policy "Editors can update %1$s" on public.%1$I for update to authenticated using ((select private.current_user_role()) in (''admin'', ''editor'')) with check ((select private.current_user_role()) in (''admin'', ''editor''))', table_name);
+    execute format('create policy "Admins can delete %1$s" on public.%1$I for delete to authenticated using ((select private.current_user_role()) = ''admin'')', table_name);
   end loop;
 end;
 $$;
 
 do $$
-declare
-  table_name text;
+declare table_name text;
 begin
   foreach table_name in array array[
-    'trade_scenarios',
-    'scenario_events',
-    'comparison_runs',
-    'comparison_results',
-    'comparison_cost_lines'
-  ]
-  loop
-    execute format(
-      'create policy "Users can read own %1$s" on public.%1$I for select to authenticated using (user_id = (select auth.uid()))',
-      table_name
-    );
-    execute format(
-      'create policy "Users can insert own %1$s" on public.%1$I for insert to authenticated with check (user_id = (select auth.uid()))',
-      table_name
-    );
-    execute format(
-      'create policy "Users can update own %1$s" on public.%1$I for update to authenticated using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()))',
-      table_name
-    );
-    execute format(
-      'create policy "Users can delete own %1$s" on public.%1$I for delete to authenticated using (user_id = (select auth.uid()))',
-      table_name
-    );
+    'trade_scenarios', 'scenario_comparison_cases', 'scenario_events',
+    'comparison_runs', 'comparison_results', 'comparison_cost_lines'
+  ] loop
+    execute format('create policy "Users can read own %1$s" on public.%1$I for select to authenticated using (user_id = (select auth.uid()))', table_name);
+    execute format('create policy "Users can insert own %1$s" on public.%1$I for insert to authenticated with check (user_id = (select auth.uid()))', table_name);
+    execute format('create policy "Users can update own %1$s" on public.%1$I for update to authenticated using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()))', table_name);
+    execute format('create policy "Users can delete own %1$s" on public.%1$I for delete to authenticated using (user_id = (select auth.uid()))', table_name);
   end loop;
 end;
 $$;
@@ -509,10 +549,12 @@ grant select, insert, update, delete on public.trade_template_events to authenti
 grant select, insert, update, delete on public.quotations to authenticated;
 grant select, insert, update, delete on public.quotation_versions to authenticated;
 grant select, insert, update, delete on public.quotation_issuing_institutions to authenticated;
-grant select, insert, update, delete on public.pricing_records to authenticated;
+grant select, insert, update, delete on public.institution_fee_schedules to authenticated;
+grant select, insert, update, delete on public.fee_records to authenticated;
 grant select, insert, update, delete on public.reference_rate_indices to authenticated;
 grant select, insert, update, delete on public.reference_rate_values to authenticated;
 grant select, insert, update, delete on public.trade_scenarios to authenticated;
+grant select, insert, update, delete on public.scenario_comparison_cases to authenticated;
 grant select, insert, update, delete on public.scenario_events to authenticated;
 grant select, insert, update, delete on public.comparison_runs to authenticated;
 grant select, insert, update, delete on public.comparison_results to authenticated;

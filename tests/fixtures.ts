@@ -1,4 +1,7 @@
-import type { Quotation } from '@/lib/domain/quotation/model';
+import type {
+  PricingRecord,
+  Quotation,
+} from '@/lib/domain/quotation/model';
 import type { TradeTimeline } from '@/lib/domain/timeline/model';
 
 export const standardTimeline: TradeTimeline = {
@@ -12,6 +15,22 @@ export const standardTimeline: TradeTimeline = {
     { event: 'lcMaturity', mode: 'relative', anchor: 'shipment', offsetDays: 360 },
   ],
 };
+
+export function fee(
+  overrides: Partial<PricingRecord> & Pick<PricingRecord, 'id' | 'label' | 'kind'>,
+): PricingRecord {
+  return {
+    feeCode: overrides.kind,
+    disclosureStatus: 'priced',
+    inclusionMode: 'automatic',
+    chargedByInstitutionId: 'institution-scb',
+    chargedByRole: 'confirmingBank',
+    requiredComponents: [],
+    excludedComponents: [],
+    rate: { type: 'fixedAmount', amount: 100 },
+    ...overrides,
+  };
+}
 
 export function quotation(overrides: Partial<Quotation> = {}): Quotation {
   return {
@@ -35,28 +54,38 @@ export function quotation(overrides: Partial<Quotation> = {}): Quotation {
         validFrom: '2026-01-01',
         validTo: '2026-12-31',
         pricing: [
-          {
-            id: 'instrument',
+          fee({
+            id: 'advising',
             label: 'Advising fee',
-            kind: 'instrumentFee',
-            condition: 'always',
+            kind: 'advisingFee',
+            chargedByRole: 'advisingBank',
             rate: { type: 'fixedAmount', amount: 500 },
-          },
-          {
+          }),
+          fee({
+            id: 'negotiation',
+            label: 'Negotiation fee',
+            kind: 'negotiationFee',
+            chargedByRole: 'negotiatingBank',
+            requiredComponents: ['discounting'],
+            rate: { type: 'fixedAmount', amount: 250 },
+          }),
+          fee({
             id: 'confirmation',
             label: 'Confirmation fee',
             kind: 'confirmationFee',
-            condition: 'confirmationRequired',
+            requiredComponents: ['confirmation'],
             rate: { type: 'annualizedPercentage', ratePct: 0.9 },
             startEvent: 'lcIssuance',
             endEvent: 'lcMaturity',
             dayCountConvention: 'ACT/360',
-          },
-          {
+          }),
+          fee({
             id: 'discount-confirmed',
+            feeCode: 'discounting-confirmed',
             label: 'Discounting with confirmation',
             kind: 'discounting',
-            condition: 'confirmationRequired',
+            chargedByRole: 'financingProvider',
+            requiredComponents: ['confirmation', 'discounting'],
             rate: {
               type: 'referencePlusSpread',
               referenceRateFamily: 'TERM_SOFR',
@@ -65,12 +94,15 @@ export function quotation(overrides: Partial<Quotation> = {}): Quotation {
             startEvent: 'supplierPayment',
             endEvent: 'lcMaturity',
             dayCountConvention: 'ACT/360',
-          },
-          {
+          }),
+          fee({
             id: 'discount-unconfirmed',
+            feeCode: 'discounting-unconfirmed',
             label: 'Discounting without confirmation',
             kind: 'discounting',
-            condition: 'confirmationNotRequired',
+            chargedByRole: 'financingProvider',
+            requiredComponents: ['discounting'],
+            excludedComponents: ['confirmation'],
             rate: {
               type: 'referencePlusSpread',
               referenceRateFamily: 'TERM_SOFR',
@@ -79,7 +111,7 @@ export function quotation(overrides: Partial<Quotation> = {}): Quotation {
             startEvent: 'supplierPayment',
             endEvent: 'lcMaturity',
             dayCountConvention: 'ACT/360',
-          },
+          }),
         ],
       },
     ],

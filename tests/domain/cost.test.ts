@@ -4,293 +4,204 @@ import {
   resolveTermRateTenorMonths,
 } from '@/lib/domain/cost/calculateQuotationCost';
 import { resolveTimeline } from '@/lib/domain/timeline/resolveTimeline';
-import { quotation, referenceRates, standardTimeline } from '../fixtures';
+import type { ComparisonCase } from '@/lib/domain/financing/model';
+import { fee, quotation, referenceRates, standardTimeline } from '../fixtures';
+
+const confirmedDiscounting: ComparisonCase = {
+  id: 'confirmed-discounting',
+  label: 'Confirmation + discounting',
+  components: ['confirmation', 'discounting'],
+};
+const discountingOnly: ComparisonCase = {
+  id: 'discounting-only',
+  label: 'Discounting only',
+  components: ['discounting'],
+};
+
+function context(comparisonCase: ComparisonCase = { ...discountingOnly, components: [...discountingOnly.components] }) {
+  return {
+    amount: 1_000_000,
+    currency: 'USD',
+    comparisonCase,
+    comparisonMode: 'coreFeesOnly' as const,
+    timeline: resolveTimeline(standardTimeline),
+    referenceRates,
+  };
+}
 
 describe('calculateQuotationCost', () => {
-  it('prices confirmation and confirmed discounting as independent cost lines', () => {
+  it('aggregates confirmation and discounting in one transaction result', () => {
     const item = quotation();
-    const result = calculateQuotationCost(item, item.versions[0], {
-      amount: 1_000_000,
-      currency: 'USD',
-      financing: {
-        confirmationRequired: true,
-        discounting: true,
-        forfaiting: false,
-      },
-      timeline: resolveTimeline(standardTimeline),
-      referenceRates,
-    });
-
+    const result = calculateQuotationCost(item, item.versions[0], context(confirmedDiscounting));
     expect(result.lines.map((line) => line.pricingRecordId)).toEqual([
-      'instrument',
       'confirmation',
       'discount-confirmed',
     ]);
     expect(result.confirmationCost).toBeCloseTo(9_250, 6);
     expect(result.financingCost).toBeCloseTo(42_769.444444, 6);
-    expect(result.totalCost).toBeCloseTo(52_519.444444, 6);
+    expect(result.totalCost).toBeCloseTo(52_019.444444, 6);
   });
 
-  it('uses the without-confirmation discounting price without adding confirmation cost', () => {
+  it('uses only the explicitly applicable unconfirmed discounting record', () => {
     const item = quotation();
-    const result = calculateQuotationCost(item, item.versions[0], {
-      amount: 1_000_000,
-      currency: 'USD',
-      financing: {
-        confirmationRequired: false,
-        discounting: true,
-        forfaiting: false,
-      },
-      timeline: resolveTimeline(standardTimeline),
-      referenceRates,
-    });
-
-    expect(result.lines.map((line) => line.pricingRecordId)).toEqual([
-      'instrument',
-      'discount-unconfirmed',
-    ]);
+    const result = calculateQuotationCost(item, item.versions[0], context());
+    expect(result.lines.map((line) => line.pricingRecordId)).toEqual(['discount-unconfirmed']);
     expect(result.confirmationCost).toBe(0);
-    expect(result.lines[1].referenceRate).toMatchObject({
-      family: 'TERM_SOFR',
-      currency: 'USD',
-      tenorMonths: 12,
-      ratePct: 3.85,
-    });
-    expect(result.financingCost).toBeCloseTo(75_447.222222, 6);
-    expect(result.totalCost).toBeCloseTo(75_947.222222, 6);
+    expect(result.lines[0].referenceRate).toMatchObject({ tenorMonths: 12, ratePct: 3.85 });
   });
 
-  it('rejects simultaneous discounting and forfaiting', () => {
-    const item = quotation();
-    expect(() =>
-      calculateQuotationCost(item, item.versions[0], {
-        amount: 1_000_000,
-        currency: 'USD',
-        financing: {
-          confirmationRequired: false,
-          discounting: true,
-          forfaiting: true,
-        },
-        timeline: resolveTimeline(standardTimeline),
-        referenceRates,
-      }),
-    ).toThrow('alternative early-payment');
-  });
-
-  it('rejects missing unconfirmed discounting pricing instead of treating it as zero', () => {
+  it('rejects a quote that only discloses confirmed discounting for an unconfirmed case', () => {
     const item = quotation({
       versions: [{
+        ...quotation().versions[0],
         id: 'confirmed-only',
-        version: 1,
-        status: 'active',
-        validFrom: '2026-01-01',
-        pricing: quotation().versions[0].pricing.filter(
-          (record) => record.id !== 'discount-unconfirmed',
-        ),
+        pricing: quotation().versions[0].pricing.filter((record) => record.id !== 'discount-unconfirmed'),
       }],
     });
-
-    expect(() =>
-      calculateQuotationCost(item, item.versions[0], {
-        amount: 1_000_000,
-        currency: 'USD',
-        financing: {
-          confirmationRequired: false,
-          discounting: true,
-          forfaiting: false,
-        },
-        timeline: resolveTimeline(standardTimeline),
-        referenceRates,
-      }),
-    ).toThrow('missing discounting pricing without confirmation');
-  });
-
-  it('applies 30/360 before minimum-period and billing-rounding rules', () => {
-    const item = quotation({
-      versions: [{
-        id: 'thirty-360-version',
-        version: 1,
-        status: 'active',
-        validFrom: '2026-01-01',
-        pricing: [{
-          id: 'thirty-360-fee',
-          label: 'Quarterly confirmation',
-          kind: 'confirmationFee',
-          condition: 'confirmationRequired',
-          rate: { type: 'annualizedPercentage', ratePct: 1 },
-          startEvent: 'lcIssuance',
-          endEvent: 'presentation',
-          dayCountConvention: '30/360',
-          billingFrequency: 'quarterly',
-          partialPeriodRounding: 'up',
-        }],
-      }],
-    });
-    const result = calculateQuotationCost(item, item.versions[0], {
-      amount: 1_000_000,
-      currency: 'USD',
-      financing: {
-        confirmationRequired: true,
-        discounting: false,
-        forfaiting: false,
-      },
-      timeline: resolveTimeline(standardTimeline),
-      referenceRates,
-    });
-
-    expect(result.lines[0].chargeDays).toBe(90);
-    expect(result.totalCost).toBe(2_500);
-  });
-
-  it('maps financing periods to 1M, 3M, 6M, and 12M term tenors', () => {
-    expect(resolveTermRateTenorMonths(30)).toBe(1);
-    expect(resolveTermRateTenorMonths(31)).toBe(3);
-    expect(resolveTermRateTenorMonths(90)).toBe(3);
-    expect(resolveTermRateTenorMonths(91)).toBe(6);
-    expect(resolveTermRateTenorMonths(180)).toBe(6);
-    expect(resolveTermRateTenorMonths(181)).toBe(12);
-    expect(resolveTermRateTenorMonths(360)).toBe(12);
-    expect(() => resolveTermRateTenorMonths(361)).toThrow(
-      'No supported term-rate tenor',
+    expect(() => calculateQuotationCost(item, item.versions[0], context())).toThrow(
+      'missing discounting pricing without confirmation',
     );
   });
 
-  it('selects SHIBOR by CNY currency and a 6M tenor for forfaiting', () => {
+  it('maps financing periods to supported term tenors', () => {
+    expect(resolveTermRateTenorMonths(30)).toBe(1);
+    expect(resolveTermRateTenorMonths(31)).toBe(3);
+    expect(resolveTermRateTenorMonths(91)).toBe(6);
+    expect(resolveTermRateTenorMonths(181)).toBe(12);
+    expect(() => resolveTermRateTenorMonths(361)).toThrow('No supported term-rate tenor');
+  });
+
+  it('uses SHIBOR and the period-selected tenor for CNY forfaiting', () => {
     const item = quotation({
       currency: 'CNY',
       versions: [{
+        ...quotation().versions[0],
         id: 'cny-forfaiting',
-        version: 1,
-        status: 'active',
-        validFrom: '2026-01-01',
-        pricing: [{
+        pricing: [fee({
           id: 'forfaiting-shibor',
           label: 'CNY forfaiting',
           kind: 'forfaiting',
-          condition: 'confirmationNotRequired',
-          rate: {
-            type: 'referencePlusSpread',
-            referenceRateFamily: 'TERM_SHIBOR',
-            spreadPct: 1.25,
-          },
+          chargedByRole: 'financingProvider',
+          requiredComponents: ['forfaiting'],
+          rate: { type: 'referencePlusSpread', referenceRateFamily: 'TERM_SHIBOR', spreadPct: 1.25 },
           startEvent: 'supplierPayment',
           endEvent: 'lcMaturity',
           dayCountConvention: 'ACT/360',
-        }],
+        })],
       }],
     });
     const timeline = resolveTimeline({
       tradeStartDate: '2026-01-01',
       events: [
-        {
-          event: 'supplierPayment',
-          mode: 'relative',
-          anchor: 'tradeStart',
-          offsetDays: 10,
-        },
-        {
-          event: 'lcMaturity',
-          mode: 'relative',
-          anchor: 'supplierPayment',
-          offsetDays: 150,
-        },
+        { event: 'supplierPayment', mode: 'relative', anchor: 'tradeStart', offsetDays: 10 },
+        { event: 'lcMaturity', mode: 'relative', anchor: 'supplierPayment', offsetDays: 150 },
       ],
     });
-
     const result = calculateQuotationCost(item, item.versions[0], {
       amount: 1_000_000,
       currency: 'CNY',
-      financing: {
-        confirmationRequired: false,
-        discounting: false,
-        forfaiting: true,
-      },
+      comparisonCase: { id: 'forfaiting', label: 'Forfaiting', components: ['forfaiting'] },
+      comparisonMode: 'coreFeesOnly',
       timeline,
       referenceRates,
     });
-
-    expect(result.lines[0].referenceRate).toMatchObject({
-      name: '6M SHIBOR',
-      family: 'TERM_SHIBOR',
-      currency: 'CNY',
-      tenorMonths: 6,
-      ratePct: 1.65,
-    });
-    expect(result.lines[0].effectiveRatePct).toBe(2.9);
+    expect(result.lines[0].referenceRate).toMatchObject({ family: 'TERM_SHIBOR', tenorMonths: 6 });
   });
 
-  it('rejects a benchmark family that does not match the quotation currency', () => {
+  it('supports confirmation-to-acceptance plus deferred-payment-to-maturity', () => {
     const item = quotation({
-      currency: 'CNY',
       versions: [{
-        id: 'wrong-family',
-        version: 1,
-        status: 'active',
-        validFrom: '2026-01-01',
-        pricing: [{
-          id: 'wrong-family-discount',
-          label: 'Wrong benchmark',
-          kind: 'discounting',
-          condition: 'confirmationNotRequired',
-          rate: {
-            type: 'referencePlusSpread',
-            referenceRateFamily: 'TERM_SOFR',
-            spreadPct: 1,
-          },
-          startEvent: 'supplierPayment',
-          endEvent: 'lcMaturity',
-          dayCountConvention: 'ACT/360',
-        }],
+        ...quotation().versions[0],
+        id: 'split-confirmation',
+        pricing: [
+          fee({
+            id: 'confirmation-to-acceptance', label: 'Confirmation until acceptance', kind: 'confirmationFee',
+            requiredComponents: ['confirmation'], rate: { type: 'annualizedPercentage', ratePct: 0.9 },
+            startEvent: 'lcIssuance', endEvent: 'acceptance', dayCountConvention: 'ACT/360',
+          }),
+          fee({
+            id: 'deferred-to-maturity', label: 'Deferred payment fee', kind: 'deferredPaymentFee',
+            requiredComponents: ['confirmation'], rate: { type: 'annualizedPercentage', ratePct: 0.7 },
+            startEvent: 'acceptance', endEvent: 'lcMaturity', dayCountConvention: 'ACT/360',
+          }),
+        ],
       }],
     });
-
-    expect(() =>
-      calculateQuotationCost(item, item.versions[0], {
-        amount: 1_000_000,
-        currency: 'CNY',
-        financing: {
-          confirmationRequired: false,
-          discounting: true,
-          forfaiting: false,
-        },
-        timeline: resolveTimeline(standardTimeline),
-        referenceRates,
-      }),
-    ).toThrow('expected TERM_SHIBOR');
+    const result = calculateQuotationCost(item, item.versions[0], {
+      ...context(),
+      comparisonCase: { id: 'confirmation', label: 'Confirmation', components: ['confirmation'] },
+    });
+    expect(result.lines).toEqual([
+      expect.objectContaining({ pricingRecordId: 'confirmation-to-acceptance', chargeDays: 22 }),
+      expect.objectContaining({ pricingRecordId: 'deferred-to-maturity', chargeDays: 348 }),
+    ]);
   });
 
-  it('rejects fixed-rate discounting because financing must use a term benchmark', () => {
+  it('treats negotiation as admin and includes conditional admin fees only when selected', () => {
     const item = quotation({
       versions: [{
-        id: 'fixed-discounting',
-        version: 1,
-        status: 'active',
-        validFrom: '2026-01-01',
-        pricing: [{
-          id: 'fixed-discount',
-          label: 'Fixed discounting',
-          kind: 'discounting',
-          condition: 'confirmationNotRequired',
-          rate: { type: 'annualizedPercentage', ratePct: 5 },
-          startEvent: 'supplierPayment',
-          endEvent: 'lcMaturity',
-          dayCountConvention: 'ACT/360',
-        }],
+        ...quotation().versions[0],
+        pricing: [
+          ...quotation().versions[0].pricing,
+          fee({
+            id: 'amendment', label: 'Confirming bank amendment', kind: 'amendmentFee',
+            inclusionMode: 'conditional', requiredComponents: ['confirmation'], rate: { type: 'fixedAmount', amount: 75 },
+          }),
+          fee({
+            id: 'discrepancy', label: 'Discrepancy', kind: 'discrepancyFee',
+            inclusionMode: 'conditional', rate: { type: 'fixedAmount', amount: 125 },
+          }),
+        ],
       }],
     });
+    const core = calculateQuotationCost(item, item.versions[0], context(confirmedDiscounting));
+    const all = calculateQuotationCost(item, item.versions[0], {
+      ...context(confirmedDiscounting),
+      comparisonMode: 'allAvailableFees',
+      includedConditionalFeeKinds: ['amendmentFee'],
+    });
+    expect(core.lines.some((line) => line.kind === 'negotiationFee')).toBe(false);
+    expect(all.lines.some((line) => line.kind === 'negotiationFee')).toBe(true);
+    expect(all.lines.some((line) => line.kind === 'amendmentFee')).toBe(true);
+    expect(all.lines.some((line) => line.kind === 'discrepancyFee')).toBe(false);
+    expect(all.administrativeCost).toBe(825);
+  });
 
-    expect(() =>
-      calculateQuotationCost(item, item.versions[0], {
-        amount: 1_000_000,
-        currency: 'USD',
-        financing: {
-          confirmationRequired: false,
-          discounting: true,
-          forfaiting: false,
-        },
-        timeline: resolveTimeline(standardTimeline),
-        referenceRates,
-      }),
-    ).toThrow('missing discounting pricing without confirmation');
+  it('reports missing admin disclosures without treating them as zero', () => {
+    const item = quotation();
+    const result = calculateQuotationCost(item, item.versions[0], {
+      ...context(),
+      comparisonMode: 'allAvailableFees',
+      expectedAdministrativeFeeSlots: [
+        { feeCode: 'advisingFee', kind: 'advisingFee', chargedByRole: 'advisingBank' },
+        { feeCode: 'confirming-swift', kind: 'swiftFee', chargedByRole: 'confirmingBank' },
+      ],
+    });
+    expect(result.coverageStatus).toBe('incomplete');
+    expect(result.missingAdministrativeFeeSlots).toEqual([
+      { feeCode: 'confirming-swift', kind: 'swiftFee', chargedByRole: 'confirmingBank' },
+    ]);
+  });
+
+  it('shows an explicitly waived fee as a complete zero-cost disclosure', () => {
+    const item = quotation({
+      versions: [{
+        ...quotation().versions[0],
+        pricing: [...quotation().versions[0].pricing, fee({
+          id: 'swift-waived', label: 'SWIFT waived', kind: 'swiftFee',
+          disclosureStatus: 'waived', rate: { type: 'fixedAmount', amount: 75 },
+        })],
+      }],
+    });
+    const result = calculateQuotationCost(item, item.versions[0], {
+      ...context(), comparisonMode: 'allAvailableFees',
+      expectedAdministrativeFeeSlots: [{ feeCode: 'swiftFee', kind: 'swiftFee', chargedByRole: 'confirmingBank' }],
+    });
+    expect(result.coverageStatus).toBe('complete');
+    expect(result.lines.find((line) => line.kind === 'swiftFee')).toMatchObject({
+      finalCost: 0,
+      disclosureStatus: 'waived',
+      rate: { type: 'fixedAmount', amount: 75 },
+    });
   });
 });

@@ -1,4 +1,4 @@
-import { assertValidFinancingSelection } from '../financing/model';
+import { assertValidComparisonCase } from '../financing/model';
 import type {
   PricingRecord,
   Quotation,
@@ -6,37 +6,44 @@ import type {
   TermReferenceRateFamily,
   TermReferenceRateTenorMonths,
 } from '../quotation/model';
+import {
+  feeSlotKey,
+  isAdministrativeFeeKind,
+  isCoreFeeKind,
+  pricingRecordApplies,
+} from '../quotation/model';
 import { findMissingPricingCoverage } from '../quotation/pricingCoverage';
-import type {
-  CostCalculationContext,
-  CostLine,
-  QuotationCost,
-} from './model';
+import type { CostCalculationContext, CostLine, QuotationCost } from './model';
 
 export function calculateQuotationCost(
   quotation: Quotation,
   version: QuotationVersion,
   context: CostCalculationContext,
+  pricing: PricingRecord[] = version.pricing,
 ): QuotationCost {
-  assertValidFinancingSelection(context.financing);
-  const missingPricing = findMissingPricingCoverage(
-    version.pricing,
-    context.financing,
-  );
+  assertValidComparisonCase(context.comparisonCase);
+  validatePricing(pricing);
+
+  const missingPricing = findMissingPricingCoverage(pricing, context.comparisonCase);
   if (missingPricing.length > 0) {
     throw new Error(
       `Quotation "${quotation.reference}" is ineligible: missing ${missingPricing.join(', ')}.`,
     );
   }
-  const applicableRecords = version.pricing.filter((record) =>
-    appliesToSelection(record, context),
-  );
-  const lines = applicableRecords.map((record) => calculateLine(record, context));
 
-  const instrumentCost = sum(lines, 'instrumentFee');
-  const confirmationCost = sum(lines, 'confirmationFee');
-  const financingCost = sum(lines, 'discounting') + sum(lines, 'forfaiting');
-  const totalCost = instrumentCost + confirmationCost + financingCost;
+  const applicableRecords = pricing.filter((record) => appliesToComparison(record, context));
+  const lines = applicableRecords.map((record) => calculateLine(record, context));
+  const coreCost = lines
+    .filter((line) => isCoreFeeKind(line.kind))
+    .reduce((total, line) => total + line.finalCost, 0);
+  const administrativeCost = lines
+    .filter((line) => isAdministrativeFeeKind(line.kind))
+    .reduce((total, line) => total + line.finalCost, 0);
+  const totalCost = coreCost + administrativeCost;
+  const missingAdministrativeFeeSlots = findMissingAdministrativeSlots(
+    applicableRecords,
+    context,
+  );
 
   return {
     quotationId: quotation.id,
@@ -44,32 +51,57 @@ export function calculateQuotationCost(
     quotationVersionId: version.id,
     institutionId: quotation.institution.id,
     institutionName: quotation.institution.name,
+    comparisonCaseId: context.comparisonCase.id,
+    comparisonCaseLabel: context.comparisonCase.label,
+    selectedComponents: context.comparisonCase.components,
+    comparisonMode: context.comparisonMode,
     currency: context.currency,
     amount: context.amount,
     lines,
-    instrumentCost,
-    confirmationCost,
-    financingCost,
+    coreCost,
+    administrativeCost,
+    confirmationCost: sum(lines, 'confirmationFee'),
+    deferredPaymentCost: sum(lines, 'deferredPaymentFee'),
+    financingCost: sum(lines, 'discounting') + sum(lines, 'forfaiting'),
     totalCost,
     allInPct: context.amount === 0 ? 0 : (totalCost / context.amount) * 100,
+    coverageStatus:
+      missingAdministrativeFeeSlots.length === 0 ? 'complete' : 'incomplete',
+    missingAdministrativeFeeSlots,
   };
 }
 
-function appliesToSelection(
+function validatePricing(pricing: PricingRecord[]): void {
+  for (const record of pricing) {
+    if (isCoreFeeKind(record.kind) && record.inclusionMode === 'conditional') {
+      throw new Error(`Core fee "${record.label}" cannot be conditional.`);
+    }
+    if (record.disclosureStatus === 'priced' && !record.rate) {
+      throw new Error(`Priced fee "${record.label}" requires a rate.`);
+    }
+    if (
+      record.disclosureStatus === 'priced' &&
+      (record.kind === 'discounting' || record.kind === 'forfaiting') &&
+      record.rate?.type !== 'referencePlusSpread'
+    ) {
+      throw new Error(`Financing fee "${record.label}" requires term reference-rate pricing.`);
+    }
+  }
+}
+
+function appliesToComparison(
   record: PricingRecord,
   context: CostCalculationContext,
 ): boolean {
-  if (record.kind === 'confirmationFee' && !context.financing.confirmationRequired) {
+  if (!pricingRecordApplies(record, context.comparisonCase)) return false;
+  if (context.comparisonMode === 'coreFeesOnly' && !isCoreFeeKind(record.kind)) {
     return false;
   }
-  if (record.kind === 'discounting' && !context.financing.discounting) return false;
-  if (record.kind === 'forfaiting' && !context.financing.forfaiting) return false;
-
-  if (record.condition === 'confirmationRequired') {
-    return context.financing.confirmationRequired;
-  }
-  if (record.condition === 'confirmationNotRequired') {
-    return !context.financing.confirmationRequired;
+  if (record.inclusionMode === 'conditional') {
+    return (
+      isAdministrativeFeeKind(record.kind) &&
+      (context.includedConditionalFeeKinds ?? []).includes(record.kind)
+    );
   }
   return true;
 }
@@ -78,6 +110,24 @@ function calculateLine(
   record: PricingRecord,
   context: CostCalculationContext,
 ): CostLine {
+  const common = {
+    pricingRecordId: record.id,
+    feeCode: record.feeCode,
+    label: record.label,
+    kind: record.kind,
+    inclusionMode: record.inclusionMode,
+    disclosureStatus: record.disclosureStatus,
+    chargedByInstitutionId: record.chargedByInstitutionId,
+    chargedByRole: record.chargedByRole,
+    source: record.source ?? 'quotation' as const,
+    sourceId: record.sourceId,
+  };
+
+  if (record.disclosureStatus !== 'priced') {
+    return { ...common, rate: record.rate, calculatedCost: 0, finalCost: 0 };
+  }
+  if (!record.rate) throw new Error(`Priced fee "${record.label}" requires a rate.`);
+
   const period = resolvePeriod(record, context);
   const conventionDays =
     record.dayCountConvention === '30/360' && period.start && period.end
@@ -87,18 +137,11 @@ function calculateLine(
       : period.chargeDays;
   const effectiveDays = resolveBillingDays(record, conventionDays);
   const { calculatedCost, referenceRate, baseRatePct, effectiveRatePct } =
-    calculateBaseCost(
-    record,
-    context,
-    effectiveDays,
-    period.chargeDays,
-  );
+    calculateBaseCost(record, context, effectiveDays, period.chargeDays);
   const finalCost = Math.max(calculatedCost, record.minimumFeeAmount ?? 0);
 
   return {
-    pricingRecordId: record.id,
-    label: record.label,
-    kind: record.kind,
+    ...common,
     startDay: period.start?.day,
     endDay: period.end?.day,
     chargeDays: effectiveDays,
@@ -112,13 +155,26 @@ function calculateLine(
   };
 }
 
+function findMissingAdministrativeSlots(
+  applicableRecords: PricingRecord[],
+  context: CostCalculationContext,
+) {
+  if (context.comparisonMode === 'coreFeesOnly') return [];
+  const disclosed = new Set(
+    applicableRecords.flatMap((record) =>
+      isAdministrativeFeeKind(record.kind)
+        ? [feeSlotKey({ feeCode: record.feeCode, kind: record.kind, chargedByRole: record.chargedByRole })]
+        : [],
+    ),
+  );
+  return (context.expectedAdministrativeFeeSlots ?? []).filter(
+    (slot) => !disclosed.has(feeSlotKey(slot)),
+  );
+}
+
 function resolvePeriod(record: PricingRecord, context: CostCalculationContext) {
   if (!record.startEvent && !record.endEvent) {
-    return {
-      start: undefined,
-      end: undefined,
-      chargeDays: undefined,
-    };
+    return { start: undefined, end: undefined, chargeDays: undefined };
   }
   if (!record.startEvent || !record.endEvent) {
     throw new Error(`Pricing record "${record.label}" must define both period events.`);
@@ -155,25 +211,23 @@ function calculateBaseCost(
   chargeDays?: number,
   financingPeriodDays?: number,
 ) {
-  switch (record.rate.type) {
+  const rate = record.rate;
+  if (!rate) throw new Error(`Priced fee "${record.label}" requires a rate.`);
+  switch (rate.type) {
     case 'fixedAmount':
-      return { calculatedCost: record.rate.amount };
+      return { calculatedCost: rate.amount };
     case 'flatPercentage':
       return {
-        calculatedCost: context.amount * record.rate.ratePct / 100,
-        effectiveRatePct: record.rate.ratePct,
+        calculatedCost: context.amount * rate.ratePct / 100,
+        effectiveRatePct: rate.ratePct,
       };
     case 'annualizedPercentage':
       return {
         calculatedCost:
-          context.amount *
-          record.rate.ratePct /
-          100 *
-          dayCountFraction(record, chargeDays),
-        effectiveRatePct: record.rate.ratePct,
+          context.amount * rate.ratePct / 100 * dayCountFraction(record, chargeDays),
+        effectiveRatePct: rate.ratePct,
       };
     case 'referencePlusSpread': {
-      const rate = record.rate;
       if (financingPeriodDays == null) {
         throw new Error(
           `Term reference-rate pricing record "${record.label}" requires a financing period.`,
@@ -195,10 +249,7 @@ function calculateBaseCost(
       const effectiveRatePct = reference.ratePct + rate.spreadPct;
       return {
         calculatedCost:
-          context.amount *
-          effectiveRatePct /
-          100 *
-          dayCountFraction(record, chargeDays),
+          context.amount * effectiveRatePct / 100 * dayCountFraction(record, chargeDays),
         baseRatePct: reference.ratePct,
         effectiveRatePct,
         referenceRate: reference,
@@ -217,9 +268,7 @@ export function resolveTermRateTenorMonths(
   if (periodDays <= 90) return 3;
   if (periodDays <= 180) return 6;
   if (periodDays <= 360) return 12;
-  throw new Error(
-    `No supported term-rate tenor covers a ${periodDays}-day financing period.`,
-  );
+  throw new Error(`No supported term-rate tenor covers a ${periodDays}-day financing period.`);
 }
 
 function assertFamilyMatchesCurrency(
@@ -234,9 +283,7 @@ function assertFamilyMatchesCurrency(
         ? 'TERM_SHIBOR'
         : undefined;
   if (!expectedFamily) {
-    throw new Error(
-      `No term reference-rate family is configured for ${normalizedCurrency}.`,
-    );
+    throw new Error(`No term reference-rate family is configured for ${normalizedCurrency}.`);
   }
   if (family !== expectedFamily) {
     throw new Error(
@@ -245,10 +292,7 @@ function assertFamilyMatchesCurrency(
   }
 }
 
-function dayCountFraction(
-  record: PricingRecord,
-  chargeDays?: number,
-): number {
+function dayCountFraction(record: PricingRecord, chargeDays?: number): number {
   if (chargeDays == null) {
     throw new Error(`Annualized pricing record "${record.label}" requires a pricing period.`);
   }
