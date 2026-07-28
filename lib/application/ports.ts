@@ -1,12 +1,17 @@
 import type { ReferenceRate } from '@/lib/domain/cost/model';
 import type {
-  Quotation,
-  QuotationFilter,
+  IssuingBankQuotation,
+  NonIssuingBankQuotation,
+  QuotationApplicabilityContext,
   TermReferenceRateFamily,
 } from '@/lib/domain/quotation/model';
 
-export interface QuotationRepository {
-  findApplicable(filter: QuotationFilter): Promise<Quotation[]>;
+export interface IssuingBankQuotationRepository {
+  findApplicable(context: QuotationApplicabilityContext): Promise<IssuingBankQuotation[]>;
+}
+
+export interface NonIssuingBankQuotationRepository {
+  findApplicable(context: QuotationApplicabilityContext): Promise<NonIssuingBankQuotation[]>;
 }
 
 export interface ReferenceRateRepository {

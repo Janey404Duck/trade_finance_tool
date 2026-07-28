@@ -1,6 +1,8 @@
 import type {
-  PricingRecord,
-  Quotation,
+  IssuingBankFeeRecord,
+  IssuingBankQuotation,
+  NonIssuingBankFeeRecord,
+  NonIssuingBankQuotation,
 } from '@/lib/domain/quotation/model';
 import type { TradeTimeline } from '@/lib/domain/timeline/model';
 
@@ -16,25 +18,96 @@ export const standardTimeline: TradeTimeline = {
   ],
 };
 
-export function fee(
-  overrides: Partial<PricingRecord> & Pick<PricingRecord, 'id' | 'label' | 'kind'>,
-): PricingRecord {
+export function issuingFee(
+  overrides: Partial<IssuingBankFeeRecord> &
+    Pick<IssuingBankFeeRecord, 'id' | 'label' | 'kind'>,
+): IssuingBankFeeRecord {
   return {
     feeCode: overrides.kind,
     disclosureStatus: 'priced',
-    inclusionMode: 'automatic',
-    chargedByInstitutionId: 'institution-scb',
-    chargedByRole: 'confirmingBank',
-    requiredComponents: [],
-    excludedComponents: [],
     rate: { type: 'fixedAmount', amount: 100 },
     ...overrides,
   };
 }
 
-export function quotation(overrides: Partial<Quotation> = {}): Quotation {
+export function nonIssuingFee(
+  overrides: Partial<NonIssuingBankFeeRecord> &
+    Pick<NonIssuingBankFeeRecord, 'id' | 'label' | 'kind'>,
+): NonIssuingBankFeeRecord {
   return {
-    id: 'quotation-1',
+    feeCode: overrides.kind,
+    disclosureStatus: 'priced',
+    applicableSolutions: [
+      'confirmationOnly',
+      'confirmationWithDiscounting',
+      'discountingOnly',
+      'forfaitingOnly',
+      'confirmationWithForfaiting',
+    ],
+    rate: { type: 'fixedAmount', amount: 100 },
+    ...overrides,
+  };
+}
+
+export function issuingQuotation(
+  overrides: Partial<IssuingBankQuotation> = {},
+): IssuingBankQuotation {
+  return {
+    id: 'issuing-quotation-1',
+    reference: 'ZIRAAT-ISS-2026-001',
+    institution: {
+      id: 'institution-ziraat',
+      name: 'Ziraat Bank',
+      type: 'bank',
+      active: true,
+    },
+    currency: 'USD',
+    productType: 'issuingBankFees',
+    tenorDays: 450,
+    versions: [{
+      id: 'issuing-version-1',
+      version: 1,
+      status: 'active',
+      validFrom: '2026-01-01',
+      validTo: '2026-12-31',
+      pricing: [
+        issuingFee({
+          id: 'issuing-fee',
+          label: 'Issuing fee',
+          kind: 'issuingFee',
+          rate: { type: 'annualizedPercentage', ratePct: 0.25 },
+          startEvent: 'lcIssuance',
+          endEvent: 'lcMaturity',
+          dayCountConvention: 'ACT/360',
+        }),
+        issuingFee({
+          id: 'issuing-swift',
+          label: 'Issuing-bank SWIFT fee',
+          kind: 'swiftFee',
+          rate: { type: 'fixedAmount', amount: 60 },
+        }),
+      ],
+    }],
+    ...overrides,
+  };
+}
+
+export function nonIssuingQuotation(
+  overrides: Partial<NonIssuingBankQuotation> = {},
+): NonIssuingBankQuotation {
+  const confirmationSolutions = [
+    'confirmationOnly',
+    'confirmationWithDiscounting',
+    'confirmationWithForfaiting',
+  ] as const;
+  const earlyPaymentSolutions = [
+    'confirmationWithDiscounting',
+    'discountingOnly',
+    'forfaitingOnly',
+    'confirmationWithForfaiting',
+  ] as const;
+  return {
+    id: 'non-issuing-quotation-1',
     reference: 'SCB-QT-2026-001',
     institution: {
       id: 'institution-scb',
@@ -44,77 +117,68 @@ export function quotation(overrides: Partial<Quotation> = {}): Quotation {
     },
     currency: 'USD',
     productType: 'lcFinancing',
-    tenorDays: 400,
-    issuingInstitutionIds: [],
-    versions: [
-      {
-        id: 'version-1',
-        version: 1,
-        status: 'active',
-        validFrom: '2026-01-01',
-        validTo: '2026-12-31',
-        pricing: [
-          fee({
-            id: 'advising',
-            label: 'Advising fee',
-            kind: 'advisingFee',
-            chargedByRole: 'advisingBank',
-            rate: { type: 'fixedAmount', amount: 500 },
-          }),
-          fee({
-            id: 'negotiation',
-            label: 'Negotiation fee',
-            kind: 'negotiationFee',
-            chargedByRole: 'negotiatingBank',
-            requiredComponents: ['discounting'],
-            rate: { type: 'fixedAmount', amount: 250 },
-          }),
-          fee({
-            id: 'confirmation',
-            label: 'Confirmation fee',
-            kind: 'confirmationFee',
-            requiredComponents: ['confirmation'],
-            rate: { type: 'annualizedPercentage', ratePct: 0.9 },
-            startEvent: 'lcIssuance',
-            endEvent: 'lcMaturity',
-            dayCountConvention: 'ACT/360',
-          }),
-          fee({
-            id: 'discount-confirmed',
-            feeCode: 'discounting-confirmed',
-            label: 'Discounting with confirmation',
-            kind: 'discounting',
-            chargedByRole: 'financingProvider',
-            requiredComponents: ['confirmation', 'discounting'],
-            rate: {
-              type: 'referencePlusSpread',
-              referenceRateFamily: 'TERM_SOFR',
-              spreadPct: 0.6,
-            },
-            startEvent: 'supplierPayment',
-            endEvent: 'lcMaturity',
-            dayCountConvention: 'ACT/360',
-          }),
-          fee({
-            id: 'discount-unconfirmed',
-            feeCode: 'discounting-unconfirmed',
-            label: 'Discounting without confirmation',
-            kind: 'discounting',
-            chargedByRole: 'financingProvider',
-            requiredComponents: ['discounting'],
-            excludedComponents: ['confirmation'],
-            rate: {
-              type: 'referencePlusSpread',
-              referenceRateFamily: 'TERM_SOFR',
-              spreadPct: 4,
-            },
-            startEvent: 'supplierPayment',
-            endEvent: 'lcMaturity',
-            dayCountConvention: 'ACT/360',
-          }),
-        ],
-      },
-    ],
+    tenorDays: 450,
+    issuingInstitutionIds: ['institution-ziraat'],
+    versions: [{
+      id: 'non-issuing-version-1',
+      version: 1,
+      status: 'active',
+      validFrom: '2026-01-01',
+      validTo: '2026-12-31',
+      pricing: [
+        nonIssuingFee({
+          id: 'confirmation', label: 'Confirmation fee', kind: 'confirmationFee',
+          applicableSolutions: [...confirmationSolutions],
+          rate: { type: 'annualizedPercentage', ratePct: 0.9 },
+          startEvent: 'lcIssuance', endEvent: 'lcMaturity', dayCountConvention: 'ACT/360',
+        }),
+        nonIssuingFee({
+          id: 'discount-confirmed', feeCode: 'discounting-confirmed',
+          label: 'Discounting with confirmation', kind: 'discounting',
+          applicableSolutions: ['confirmationWithDiscounting'],
+          rate: { type: 'referencePlusSpread', referenceRateFamily: 'TERM_SOFR', spreadPct: 0.6 },
+          startEvent: 'supplierPayment', endEvent: 'lcMaturity', dayCountConvention: 'ACT/360',
+        }),
+        nonIssuingFee({
+          id: 'discount-unconfirmed', feeCode: 'discounting-unconfirmed',
+          label: 'Discounting without confirmation', kind: 'discounting',
+          applicableSolutions: ['discountingOnly'],
+          rate: { type: 'referencePlusSpread', referenceRateFamily: 'TERM_SOFR', spreadPct: 4 },
+          startEvent: 'supplierPayment', endEvent: 'lcMaturity', dayCountConvention: 'ACT/360',
+        }),
+        nonIssuingFee({
+          id: 'forfaiting-unconfirmed', feeCode: 'forfaiting-unconfirmed',
+          label: 'Forfaiting without confirmation', kind: 'forfaiting',
+          applicableSolutions: ['forfaitingOnly'],
+          rate: { type: 'referencePlusSpread', referenceRateFamily: 'TERM_SOFR', spreadPct: 2 },
+          startEvent: 'supplierPayment', endEvent: 'lcMaturity', dayCountConvention: 'ACT/360',
+        }),
+        nonIssuingFee({
+          id: 'forfaiting-confirmed', feeCode: 'forfaiting-confirmed',
+          label: 'Forfaiting with confirmation', kind: 'forfaiting',
+          applicableSolutions: ['confirmationWithForfaiting'],
+          rate: { type: 'referencePlusSpread', referenceRateFamily: 'TERM_SOFR', spreadPct: 0.8 },
+          startEvent: 'supplierPayment', endEvent: 'lcMaturity', dayCountConvention: 'ACT/360',
+        }),
+        nonIssuingFee({
+          id: 'advising', label: 'Advising fee', kind: 'advisingFee',
+          rate: { type: 'fixedAmount', amount: 150 },
+        }),
+        nonIssuingFee({
+          id: 'non-issuing-swift', label: 'SWIFT fee', kind: 'swiftFee',
+          rate: { type: 'fixedAmount', amount: 75 },
+        }),
+        nonIssuingFee({
+          id: 'handling', label: 'Handling fee waived', kind: 'handlingFee',
+          disclosureStatus: 'waived', rate: undefined,
+        }),
+        nonIssuingFee({
+          id: 'negotiation', label: 'Negotiation fee', kind: 'negotiationFee',
+          applicableSolutions: [...earlyPaymentSolutions],
+          rate: { type: 'fixedAmount', amount: 250 },
+        }),
+      ],
+    }],
     ...overrides,
   };
 }

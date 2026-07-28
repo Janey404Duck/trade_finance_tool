@@ -1,13 +1,11 @@
-import type { ComparisonCase } from '../financing/model';
+import type { SolutionKind } from '../financing/model';
 import type {
-  AdministrativeFeeKind,
   ComparisonMode,
   DayCountConvention,
-  FeeCoverageSlot,
   FeeDisclosureStatus,
-  FeeInclusionMode,
-  InstitutionRole,
-  PricingComponentKind,
+  FeeKind,
+  IssuingBankFeeKind,
+  NonIssuingAdministrativeFeeKind,
   PricingRate,
   TermReferenceRateFamily,
   TermReferenceRateTenorMonths,
@@ -24,28 +22,24 @@ export type ReferenceRate = {
   effectiveDate: string;
 };
 
-export type CostCalculationContext = {
+export type FeeCalculationContext = {
   amount: number;
   currency: string;
-  comparisonCase: ComparisonCase;
-  comparisonMode: ComparisonMode;
-  includedConditionalFeeKinds?: AdministrativeFeeKind[];
-  expectedAdministrativeFeeSlots?: FeeCoverageSlot[];
   timeline: ResolvedTimeline;
   referenceRates: ReferenceRate[];
 };
 
 export type CostLine = {
-  pricingRecordId: string;
+  quotationSide: 'issuingBank' | 'nonIssuingBank';
+  quotationId: string;
+  quotationVersionId: string;
+  institutionId: string;
+  institutionName: string;
+  feeRecordId: string;
   feeCode: string;
   label: string;
-  kind: PricingComponentKind;
-  inclusionMode: FeeInclusionMode;
+  kind: FeeKind;
   disclosureStatus: FeeDisclosureStatus;
-  chargedByInstitutionId: string;
-  chargedByRole: InstitutionRole;
-  source: 'quotation' | 'institutionSchedule';
-  sourceId?: string;
   startDay?: number;
   endDay?: number;
   chargeDays?: number;
@@ -58,18 +52,25 @@ export type CostLine = {
   finalCost: number;
 };
 
-export type QuotationCost = {
+export type IssuingBankQuotationCost = {
   quotationId: string;
   quotationReference: string;
   quotationVersionId: string;
   institutionId: string;
   institutionName: string;
-  comparisonCaseId: string;
-  comparisonCaseLabel: string;
-  selectedComponents: ComparisonCase['components'];
-  comparisonMode: ComparisonMode;
-  currency: string;
-  amount: number;
+  lines: CostLine[];
+  coreCost: number;
+  administrativeCost: number;
+  totalCost: number;
+};
+
+export type NonIssuingBankQuotationCost = {
+  quotationId: string;
+  quotationReference: string;
+  quotationVersionId: string;
+  institutionId: string;
+  institutionName: string;
+  solution: SolutionKind;
   lines: CostLine[];
   coreCost: number;
   administrativeCost: number;
@@ -77,7 +78,31 @@ export type QuotationCost = {
   deferredPaymentCost: number;
   financingCost: number;
   totalCost: number;
+};
+
+export type MissingFeeIssue = {
+  quotationSide: 'issuingBank' | 'nonIssuingBank';
+  institutionId: string;
+  institutionName: string;
+  quotationId: string;
+  quotationReference: string;
+  quotationVersionId: string;
+  solution?: SolutionKind;
+  feeKind: IssuingBankFeeKind | NonIssuingAdministrativeFeeKind;
+};
+
+export type CombinedQuotationCost = {
+  solution: SolutionKind;
+  comparisonMode: ComparisonMode;
+  currency: string;
+  amount: number;
+  issuingBankCost: IssuingBankQuotationCost;
+  nonIssuingBankCost: NonIssuingBankQuotationCost;
+  lines: CostLine[];
+  coreCost: number;
+  administrativeCost: number;
+  totalCost: number;
   allInPct: number;
   coverageStatus: 'complete' | 'incomplete';
-  missingAdministrativeFeeSlots: FeeCoverageSlot[];
+  missingFees: MissingFeeIssue[];
 };

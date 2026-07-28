@@ -1,4 +1,4 @@
-import type { ComparisonCase, FinancingComponent } from '../financing/model';
+import type { SolutionKind } from '../financing/model';
 import type { TimelineEventName } from '../timeline/model';
 
 export type InstitutionType =
@@ -15,45 +15,39 @@ export type Institution = {
   active: boolean;
 };
 
-export const coreFeeKinds = [
-  'issuingFee',
+export const issuingBankFeeKinds = ['issuingFee', 'swiftFee'] as const;
+export const nonIssuingCoreFeeKinds = [
   'confirmationFee',
   'deferredPaymentFee',
   'discounting',
   'forfaiting',
 ] as const;
-
-export const administrativeFeeKinds = [
+export const nonIssuingAdministrativeFeeKinds = [
   'advisingFee',
   'negotiationFee',
-  'amendmentFee',
   'swiftFee',
-  'discrepancyFee',
   'handlingFee',
   'otherAdministrativeFee',
 ] as const;
-
-export const pricingComponentKinds = [
-  ...coreFeeKinds,
-  ...administrativeFeeKinds,
+export const nonIssuingFeeKinds = [
+  ...nonIssuingCoreFeeKinds,
+  ...nonIssuingAdministrativeFeeKinds,
 ] as const;
 
-export type CoreFeeKind = (typeof coreFeeKinds)[number];
-export type AdministrativeFeeKind = (typeof administrativeFeeKinds)[number];
-export type PricingComponentKind = (typeof pricingComponentKinds)[number];
+export type IssuingBankFeeKind = (typeof issuingBankFeeKinds)[number];
+export type NonIssuingCoreFeeKind = (typeof nonIssuingCoreFeeKinds)[number];
+export type NonIssuingAdministrativeFeeKind =
+  (typeof nonIssuingAdministrativeFeeKinds)[number];
+export type NonIssuingFeeKind = (typeof nonIssuingFeeKinds)[number];
+export type FeeKind = IssuingBankFeeKind | NonIssuingFeeKind;
 export type ComparisonMode = 'coreFeesOnly' | 'allAvailableFees';
-export type FeeInclusionMode = 'automatic' | 'conditional';
-export type FeeDisclosureStatus = 'priced' | 'waived' | 'notApplicable';
-export type InstitutionRole =
-  | 'issuingBank'
-  | 'confirmingBank'
-  | 'advisingBank'
-  | 'negotiatingBank'
-  | 'financingProvider';
+export type FeeDisclosureStatus = 'priced' | 'waived';
 
 export type DayCountConvention = 'ACT/360' | 'ACT/365' | '30/360';
 export type BillingFrequency = 'once' | 'monthly' | 'quarterly';
 export type PartialPeriodRounding = 'actual' | 'up';
+export type TermReferenceRateFamily = 'TERM_SOFR' | 'TERM_SHIBOR';
+export type TermReferenceRateTenorMonths = 1 | 3 | 6 | 12;
 
 export type PricingRate =
   | { type: 'fixedAmount'; amount: number }
@@ -65,20 +59,12 @@ export type PricingRate =
       spreadPct: number;
     };
 
-export type TermReferenceRateFamily = 'TERM_SOFR' | 'TERM_SHIBOR';
-export type TermReferenceRateTenorMonths = 1 | 3 | 6 | 12;
-
-export type PricingRecord = {
+export type BaseFeeRecord<Kind extends FeeKind> = {
   id: string;
   feeCode: string;
   label: string;
-  kind: PricingComponentKind;
+  kind: Kind;
   disclosureStatus: FeeDisclosureStatus;
-  inclusionMode: FeeInclusionMode;
-  chargedByInstitutionId: string;
-  chargedByRole: InstitutionRole;
-  requiredComponents: FinancingComponent[];
-  excludedComponents: FinancingComponent[];
   rate?: PricingRate;
   startEvent?: TimelineEventName;
   endEvent?: TimelineEventName;
@@ -89,92 +75,87 @@ export type PricingRecord = {
   minimumFeeAmount?: number;
   includeStartDate?: boolean;
   includeEndDate?: boolean;
-  source?: 'quotation' | 'institutionSchedule';
-  sourceId?: string;
 };
 
-export type QuotationVersion = {
+export type IssuingBankFeeRecord = BaseFeeRecord<IssuingBankFeeKind>;
+export type NonIssuingBankFeeRecord = BaseFeeRecord<NonIssuingFeeKind> & {
+  applicableSolutions: SolutionKind[];
+};
+
+export type QuotationVersionBase<Pricing> = {
   id: string;
   version: number;
   status: 'draft' | 'active' | 'superseded' | 'withdrawn';
   validFrom: string;
   validTo?: string;
-  pricing: PricingRecord[];
+  pricing: Pricing[];
 };
 
-export type Quotation = {
+export type IssuingBankQuotationVersion =
+  QuotationVersionBase<IssuingBankFeeRecord>;
+export type NonIssuingBankQuotationVersion =
+  QuotationVersionBase<NonIssuingBankFeeRecord>;
+
+export type QuotationBase<Version> = {
   id: string;
   reference: string;
   institution: Institution;
   currency: string;
-  productType: 'lcFinancing';
   tenorDays?: number;
   minAmount?: number;
   maxAmount?: number;
-  issuingInstitutionIds: string[];
-  versions: QuotationVersion[];
+  versions: Version[];
 };
 
-export type InstitutionFeeSchedule = {
-  id: string;
-  institution: Institution;
-  currency: string;
-  role: InstitutionRole;
-  status: 'draft' | 'active' | 'superseded' | 'withdrawn';
-  validFrom: string;
-  validTo?: string;
-  pricing: PricingRecord[];
-};
+export type IssuingBankQuotation =
+  QuotationBase<IssuingBankQuotationVersion> & {
+    productType: 'issuingBankFees';
+  };
 
-export type FeeCoverageSlot = {
-  feeCode: string;
-  kind: AdministrativeFeeKind;
-  chargedByRole: InstitutionRole;
-};
+export type NonIssuingBankQuotation =
+  QuotationBase<NonIssuingBankQuotationVersion> & {
+    productType: 'lcFinancing';
+    issuingInstitutionIds: string[];
+  };
 
-export type QuotationFilter = {
-  quotationIds?: string[];
-  institutionIds?: string[];
-  includeAllApplicable?: boolean;
-};
+export type NonIssuingQuotationSelection =
+  | { mode: 'all' }
+  | { mode: 'institutions'; institutionIds: string[] }
+  | { mode: 'quotations'; quotationIds: string[] };
 
-export type QuotationContext = {
+export type QuotationApplicabilityContext = {
   currency: string;
   amount: number;
   maturityDays: number;
-  issuingInstitutionId?: string;
+  issuingInstitutionId: string;
   asOfDate: string;
 };
 
-export type SelectedQuotation = {
-  quotation: Quotation;
-  version: QuotationVersion;
+export type SelectedIssuingBankQuotation = {
+  quotation: IssuingBankQuotation;
+  version: IssuingBankQuotationVersion;
 };
 
-export function isCoreFeeKind(kind: PricingComponentKind): kind is CoreFeeKind {
-  return (coreFeeKinds as readonly PricingComponentKind[]).includes(kind);
+export type SelectedNonIssuingBankQuotation = {
+  quotation: NonIssuingBankQuotation;
+  version: NonIssuingBankQuotationVersion;
+};
+
+export function isNonIssuingCoreFeeKind(
+  kind: FeeKind,
+): kind is NonIssuingCoreFeeKind {
+  return (nonIssuingCoreFeeKinds as readonly FeeKind[]).includes(kind);
 }
 
-export function isAdministrativeFeeKind(
-  kind: PricingComponentKind,
-): kind is AdministrativeFeeKind {
-  return (administrativeFeeKinds as readonly PricingComponentKind[]).includes(kind);
+export function isNonIssuingAdministrativeFeeKind(
+  kind: FeeKind,
+): kind is NonIssuingAdministrativeFeeKind {
+  return (nonIssuingAdministrativeFeeKinds as readonly FeeKind[]).includes(kind);
 }
 
-export function pricingRecordApplies(
-  record: PricingRecord,
-  comparisonCase: ComparisonCase,
+export function nonIssuingFeeApplies(
+  record: NonIssuingBankFeeRecord,
+  solution: SolutionKind,
 ): boolean {
-  return (
-    record.requiredComponents.every((component) =>
-      comparisonCase.components.includes(component),
-    ) &&
-    record.excludedComponents.every(
-      (component) => !comparisonCase.components.includes(component),
-    )
-  );
-}
-
-export function feeSlotKey(slot: FeeCoverageSlot): string {
-  return `${slot.feeCode}:${slot.kind}:${slot.chargedByRole}`;
+  return record.applicableSolutions.includes(solution);
 }

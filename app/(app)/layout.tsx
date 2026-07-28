@@ -10,7 +10,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         <nav aria-label="Primary navigation">
           <Link href="/compare">Compare</Link>
           <Link href="/quotations">Quotations</Link>
-          <Link href="/templates">Templates</Link>
+          <Link href="/settings">Settings</Link>
         </nav>
       </header>
       {children}

@@ -1,163 +1,277 @@
-import { calculateQuotationCost } from '@/lib/domain/cost/calculateQuotationCost';
-import type { QuotationCost, ReferenceRate } from '@/lib/domain/cost/model';
-import {
-  assertValidComparisonCase,
-  type ComparisonCase,
-} from '@/lib/domain/financing/model';
+import { calculateIssuingQuotationCost } from '@/lib/domain/cost/calculateIssuingQuotationCost';
+import { calculateNonIssuingQuotationCost } from '@/lib/domain/cost/calculateNonIssuingQuotationCost';
 import type {
-  AdministrativeFeeKind,
+  CombinedQuotationCost,
+  IssuingBankQuotationCost,
+  MissingFeeIssue,
+  ReferenceRate,
+} from '@/lib/domain/cost/model';
+import { solutionLabels, type SolutionKind } from '@/lib/domain/financing/model';
+import type {
   ComparisonMode,
-  FeeCoverageSlot,
-  InstitutionFeeSchedule,
-  PricingRecord,
-  Quotation,
-  QuotationFilter,
-  SelectedQuotation,
+  IssuingBankQuotation,
+  NonIssuingBankQuotation,
+  NonIssuingCoreFeeKind,
+  NonIssuingQuotationSelection,
+  SelectedIssuingBankQuotation,
+  SelectedNonIssuingBankQuotation,
 } from '@/lib/domain/quotation/model';
 import {
-  feeSlotKey,
-  isAdministrativeFeeKind,
-  pricingRecordApplies,
-} from '@/lib/domain/quotation/model';
-import { findMissingPricingCoverage } from '@/lib/domain/quotation/pricingCoverage';
-import { selectQuotations } from '@/lib/domain/quotation/selectQuotations';
+  findMissingIssuingCorePricing,
+  findMissingNonIssuingAdministrativeFees,
+  findMissingNonIssuingCorePricing,
+} from '@/lib/domain/quotation/pricingCoverage';
+import {
+  resolveIssuingBankQuotation,
+  selectNonIssuingBankQuotations,
+} from '@/lib/domain/quotation/selectQuotations';
 import type { TradeTimeline } from '@/lib/domain/timeline/model';
 import { resolveTimeline } from '@/lib/domain/timeline/resolveTimeline';
 
 export type CompareScenarioCommand = {
   amount: number;
   currency: string;
-  issuingInstitutionId?: string;
+  issuingInstitutionId: string;
   asOfDate: string;
   comparisonMode: ComparisonMode;
-  comparisonCases: ComparisonCase[];
-  includedConditionalFeeKinds?: AdministrativeFeeKind[];
+  solutions: SolutionKind[];
+  nonIssuingSelection: NonIssuingQuotationSelection;
   timeline: TradeTimeline;
-  quotationFilter?: QuotationFilter;
 };
 
 export type CompareScenarioDependencies = {
-  quotations: Quotation[];
+  issuingBankQuotations: IssuingBankQuotation[];
+  nonIssuingBankQuotations: NonIssuingBankQuotation[];
   referenceRates: ReferenceRate[];
-  institutionFeeSchedules?: InstitutionFeeSchedule[];
-  expectedAdministrativeFeeSlots?: FeeCoverageSlot[];
 };
 
 export type IneligibleComparisonResult = {
   eligible: false;
-  quotationId: string;
-  quotationReference: string;
-  quotationVersionId: string;
-  institutionId: string;
-  institutionName: string;
-  comparisonCaseId: string;
-  comparisonCaseLabel: string;
-  selectedComponents: ComparisonCase['components'];
-  reasons: string[];
+  solution: SolutionKind;
+  solutionLabel: string;
+  issuingQuotationId: string;
+  issuingQuotationReference: string;
+  issuingQuotationVersionId: string;
+  nonIssuingQuotationId: string;
+  nonIssuingQuotationReference: string;
+  nonIssuingQuotationVersionId: string;
+  nonIssuingInstitutionId: string;
+  nonIssuingInstitutionName: string;
+  missingCoreFees: NonIssuingCoreFeeKind[];
 };
 
-export type EligibleComparisonResult = QuotationCost & { eligible: true };
+export type EligibleComparisonResult = CombinedQuotationCost & {
+  eligible: true;
+  solutionLabel: string;
+};
+
 export type ComparisonResult = EligibleComparisonResult | IneligibleComparisonResult;
+
+export type IssuingBankComparisonSummary = {
+  cost: IssuingBankQuotationCost;
+  coverageStatus: 'complete' | 'incomplete';
+  missingFees: MissingFeeIssue[];
+};
 
 export type Comparison = {
   timeline: ReturnType<typeof resolveTimeline>;
+  issuingBank: IssuingBankComparisonSummary;
   results: ComparisonResult[];
 };
-
-type Candidate = SelectedQuotation & { pricing: PricingRecord[] };
 
 export function compareScenario(
   command: CompareScenarioCommand,
   dependencies: CompareScenarioDependencies,
 ): Comparison {
-  if (!Number.isFinite(command.amount) || command.amount <= 0) {
-    throw new Error('Transaction amount must be greater than zero.');
-  }
-  if (command.comparisonCases.length === 0) {
-    throw new Error('Select at least one comparison case.');
-  }
-  const caseIds = new Set<string>();
-  for (const comparisonCase of command.comparisonCases) {
-    assertValidComparisonCase(comparisonCase);
-    if (caseIds.has(comparisonCase.id)) {
-      throw new Error(`Comparison case id "${comparisonCase.id}" is duplicated.`);
-    }
-    caseIds.add(comparisonCase.id);
-  }
-
+  validateCommand(command);
   const timeline = resolveTimeline(command.timeline);
   const maturity = timeline.events.lcMaturity;
   if (!maturity) throw new Error('LC maturity must be defined for a comparison.');
-  const lcIssuance = timeline.events.lcIssuance;
-  const maturityDays = maturity.day - (lcIssuance?.day ?? 0);
-
-  const selected = selectQuotations(
-    dependencies.quotations,
-    {
-      amount: command.amount,
-      currency: command.currency,
-      maturityDays,
-      issuingInstitutionId: command.issuingInstitutionId,
-      asOfDate: command.asOfDate,
-    },
-    command.quotationFilter,
+  const maturityDays = maturity.day - (timeline.events.lcIssuance?.day ?? 0);
+  const applicability = {
+    amount: command.amount,
+    currency: command.currency,
+    issuingInstitutionId: command.issuingInstitutionId,
+    asOfDate: command.asOfDate,
+    maturityDays,
+  };
+  const issuing = resolveIssuingBankQuotation(
+    dependencies.issuingBankQuotations,
+    applicability,
   );
-  const candidates = selected.map((item) => ({
-    ...item,
-    pricing: mergePricing(
-      item,
-      command,
-      dependencies.institutionFeeSchedules ?? [],
-    ),
-  }));
-
-  const results = command.comparisonCases.flatMap((comparisonCase) => {
-    const expectedSlots = resolveExpectedAdministrativeSlots(
-      candidates,
-      comparisonCase,
-      command,
-      dependencies.expectedAdministrativeFeeSlots ?? [],
+  const missingIssuingCore = findMissingIssuingCorePricing(issuing.version.pricing);
+  if (missingIssuingCore.length > 0) {
+    throw new Error(
+      `Issuing quotation "${issuing.quotation.reference}" is missing issuingFee.`,
     );
-    const caseResults = candidates.map((candidate): ComparisonResult => {
-      const missing = findMissingPricingCoverage(candidate.pricing, comparisonCase);
-      if (missing.length > 0) {
-        return {
-          eligible: false,
-          quotationId: candidate.quotation.id,
-          quotationReference: candidate.quotation.reference,
-          quotationVersionId: candidate.version.id,
-          institutionId: candidate.quotation.institution.id,
-          institutionName: candidate.quotation.institution.name,
-          comparisonCaseId: comparisonCase.id,
-          comparisonCaseLabel: comparisonCase.label,
-          selectedComponents: comparisonCase.components,
-          reasons: missing,
-        };
-      }
+  }
+  const selectedNonIssuing = selectNonIssuingBankQuotations(
+    dependencies.nonIssuingBankQuotations,
+    applicability,
+    command.nonIssuingSelection,
+  );
+  const feeContext = {
+    amount: command.amount,
+    currency: command.currency,
+    timeline,
+    referenceRates: dependencies.referenceRates,
+  };
+  const issuingCost = calculateIssuingQuotationCost(
+    issuing.quotation,
+    issuing.version,
+    command.comparisonMode,
+    feeContext,
+  );
+  const issuingMissingFees = resolveIssuingMissingFees(
+    issuing,
+    command.comparisonMode,
+  );
 
-      return {
-        eligible: true,
-        ...calculateQuotationCost(
-          candidate.quotation,
-          candidate.version,
-          {
-            amount: command.amount,
-            currency: command.currency,
-            comparisonCase,
-            comparisonMode: command.comparisonMode,
-            includedConditionalFeeKinds: command.includedConditionalFeeKinds,
-            expectedAdministrativeFeeSlots: expectedSlots,
-            timeline,
-            referenceRates: dependencies.referenceRates,
-          },
-          candidate.pricing,
+  const results = command.solutions.flatMap((solution) =>
+    selectedNonIssuing
+      .map((selected) =>
+        calculateResult(
+          solution,
+          selected,
+          issuing,
+          issuingCost,
+          issuingMissingFees,
+          command,
+          feeContext,
         ),
-      };
-    });
-    return caseResults.sort(compareResults);
-  });
+      ),
+  ).sort(compareResults);
 
-  return { timeline, results };
+  return {
+    timeline,
+    issuingBank: {
+      cost: issuingCost,
+      coverageStatus: issuingMissingFees.length === 0 ? 'complete' : 'incomplete',
+      missingFees: issuingMissingFees,
+    },
+    results,
+  };
+}
+
+function validateCommand(command: CompareScenarioCommand): void {
+  if (!Number.isFinite(command.amount) || command.amount <= 0) {
+    throw new Error('Transaction amount must be greater than zero.');
+  }
+  if (!command.issuingInstitutionId.trim()) {
+    throw new Error('Select one issuing bank.');
+  }
+  if (command.solutions.length === 0) {
+    throw new Error('Select at least one solution.');
+  }
+  if (new Set(command.solutions).size !== command.solutions.length) {
+    throw new Error('Selected solutions must be unique.');
+  }
+}
+
+function calculateResult(
+  solution: SolutionKind,
+  selected: SelectedNonIssuingBankQuotation,
+  issuing: SelectedIssuingBankQuotation,
+  issuingCost: IssuingBankQuotationCost,
+  issuingMissingFees: MissingFeeIssue[],
+  command: CompareScenarioCommand,
+  feeContext: Parameters<typeof calculateNonIssuingQuotationCost>[4],
+): ComparisonResult {
+  const missingCoreFees = findMissingNonIssuingCorePricing(
+    selected.version.pricing,
+    solution,
+  );
+  if (missingCoreFees.length > 0) {
+    return {
+      eligible: false,
+      solution,
+      solutionLabel: solutionLabels[solution],
+      issuingQuotationId: issuing.quotation.id,
+      issuingQuotationReference: issuing.quotation.reference,
+      issuingQuotationVersionId: issuing.version.id,
+      nonIssuingQuotationId: selected.quotation.id,
+      nonIssuingQuotationReference: selected.quotation.reference,
+      nonIssuingQuotationVersionId: selected.version.id,
+      nonIssuingInstitutionId: selected.quotation.institution.id,
+      nonIssuingInstitutionName: selected.quotation.institution.name,
+      missingCoreFees,
+    };
+  }
+
+  const nonIssuingCost = calculateNonIssuingQuotationCost(
+    selected.quotation,
+    selected.version,
+    solution,
+    command.comparisonMode,
+    feeContext,
+  );
+  const missingFees = [
+    ...issuingMissingFees,
+    ...resolveNonIssuingMissingFees(selected, solution, command.comparisonMode),
+  ];
+  const coreCost = issuingCost.coreCost + nonIssuingCost.coreCost;
+  const administrativeCost =
+    issuingCost.administrativeCost + nonIssuingCost.administrativeCost;
+  const totalCost = coreCost + administrativeCost;
+  return {
+    eligible: true,
+    solution,
+    solutionLabel: solutionLabels[solution],
+    comparisonMode: command.comparisonMode,
+    currency: command.currency,
+    amount: command.amount,
+    issuingBankCost: issuingCost,
+    nonIssuingBankCost: nonIssuingCost,
+    lines: [...issuingCost.lines, ...nonIssuingCost.lines],
+    coreCost,
+    administrativeCost,
+    totalCost,
+    allInPct: totalCost / command.amount * 100,
+    coverageStatus: missingFees.length === 0 ? 'complete' : 'incomplete',
+    missingFees,
+  };
+}
+
+function resolveIssuingMissingFees(
+  selected: SelectedIssuingBankQuotation,
+  mode: ComparisonMode,
+): MissingFeeIssue[] {
+  if (
+    mode === 'coreFeesOnly' ||
+    selected.version.pricing.some((record) => record.kind === 'swiftFee')
+  ) {
+    return [];
+  }
+  return [{
+    quotationSide: 'issuingBank',
+    institutionId: selected.quotation.institution.id,
+    institutionName: selected.quotation.institution.name,
+    quotationId: selected.quotation.id,
+    quotationReference: selected.quotation.reference,
+    quotationVersionId: selected.version.id,
+    feeKind: 'swiftFee',
+  }];
+}
+
+function resolveNonIssuingMissingFees(
+  selected: SelectedNonIssuingBankQuotation,
+  solution: SolutionKind,
+  mode: ComparisonMode,
+): MissingFeeIssue[] {
+  if (mode === 'coreFeesOnly') return [];
+  return findMissingNonIssuingAdministrativeFees(
+    selected.version.pricing,
+    solution,
+  ).map((feeKind) => ({
+    quotationSide: 'nonIssuingBank' as const,
+    institutionId: selected.quotation.institution.id,
+    institutionName: selected.quotation.institution.name,
+    quotationId: selected.quotation.id,
+    quotationReference: selected.quotation.reference,
+    quotationVersionId: selected.version.id,
+    solution,
+    feeKind,
+  }));
 }
 
 function compareResults(a: ComparisonResult, b: ComparisonResult): number {
@@ -166,84 +280,9 @@ function compareResults(a: ComparisonResult, b: ComparisonResult): number {
   const rankDifference = rank(a) - rank(b);
   if (rankDifference !== 0) return rankDifference;
   if (a.eligible && b.eligible) return a.totalCost - b.totalCost;
-  return a.quotationReference.localeCompare(b.quotationReference);
-}
-
-function mergePricing(
-  selected: SelectedQuotation,
-  command: CompareScenarioCommand,
-  schedules: InstitutionFeeSchedule[],
-): PricingRecord[] {
-  const applicableSchedulePricing = schedules
-    .filter((schedule) => scheduleApplies(schedule, selected, command))
-    .flatMap((schedule) =>
-      schedule.pricing.map((record) => ({
-        ...record,
-        source: 'institutionSchedule' as const,
-        sourceId: schedule.id,
-      })),
-    );
-  const quotePricing = selected.version.pricing.map((record) => ({
-    ...record,
-    source: 'quotation' as const,
-    sourceId: selected.version.id,
-  }));
-
-  const merged = new Map<string, PricingRecord>();
-  for (const record of applicableSchedulePricing) merged.set(pricingKey(record), record);
-  for (const record of quotePricing) merged.set(pricingKey(record), record);
-  return [...merged.values()];
-}
-
-function scheduleApplies(
-  schedule: InstitutionFeeSchedule,
-  selected: SelectedQuotation,
-  command: CompareScenarioCommand,
-): boolean {
-  if (
-    !schedule.institution.active ||
-    schedule.status !== 'active' ||
-    schedule.currency.toUpperCase() !== command.currency.toUpperCase() ||
-    schedule.validFrom > command.asOfDate ||
-    (schedule.validTo != null && schedule.validTo < command.asOfDate)
-  ) {
-    return false;
-  }
-  if (schedule.role === 'issuingBank') {
-    return schedule.institution.id === command.issuingInstitutionId;
-  }
-  return schedule.institution.id === selected.quotation.institution.id;
-}
-
-function pricingKey(record: PricingRecord): string {
-  return `${record.feeCode}:${record.chargedByRole}`;
-}
-
-function resolveExpectedAdministrativeSlots(
-  candidates: Candidate[],
-  comparisonCase: ComparisonCase,
-  command: CompareScenarioCommand,
-  configuredSlots: FeeCoverageSlot[],
-): FeeCoverageSlot[] {
-  if (command.comparisonMode === 'coreFeesOnly') return [];
-  const slots = new Map(configuredSlots.map((slot) => [feeSlotKey(slot), slot]));
-  for (const { pricing } of candidates) {
-    for (const record of pricing) {
-      if (
-        !isAdministrativeFeeKind(record.kind) ||
-        !pricingRecordApplies(record, comparisonCase) ||
-        (record.inclusionMode === 'conditional' &&
-          !(command.includedConditionalFeeKinds ?? []).includes(record.kind))
-      ) {
-        continue;
-      }
-      const slot = {
-        feeCode: record.feeCode,
-        kind: record.kind,
-        chargedByRole: record.chargedByRole,
-      };
-      slots.set(feeSlotKey(slot), slot);
-    }
-  }
-  return [...slots.values()];
+  const reference = (result: ComparisonResult) =>
+    result.eligible
+      ? result.nonIssuingBankCost.quotationReference
+      : result.nonIssuingQuotationReference;
+  return reference(a).localeCompare(reference(b));
 }

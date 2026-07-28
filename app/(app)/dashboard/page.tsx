@@ -12,9 +12,9 @@ const links = [
     description: 'Maintain institution quotations, versioned pricing records, and applicability conditions.',
   },
   {
-    href: '/templates',
-    label: 'Trade templates',
-    description: 'Set reusable event relationships, maturity conventions, and pricing-period defaults.',
+    href: '/settings',
+    label: 'Settings',
+    description: 'Manage trade templates, timing conventions, fee schedules, and reference-rate configuration.',
   },
 ];
 

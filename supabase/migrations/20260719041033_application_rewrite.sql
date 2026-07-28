@@ -1,5 +1,4 @@
--- Application rewrite: discard the quote-package/solution-path model.
--- Profiles and Supabase Auth remain; all trade-finance domain tables are replaced.
+-- Quote-only application rewrite. Profiles and Supabase Auth remain.
 
 drop function if exists public.persist_calculation(jsonb);
 
@@ -7,11 +6,21 @@ drop table if exists public.comparison_cost_lines cascade;
 drop table if exists public.comparison_results cascade;
 drop table if exists public.comparison_runs cascade;
 drop table if exists public.scenario_events cascade;
+drop table if exists public.scenario_selected_non_issuing_quotations cascade;
+drop table if exists public.scenario_selected_non_issuing_institutions cascade;
+drop table if exists public.scenario_solutions cascade;
 drop table if exists public.scenario_comparison_cases cascade;
 drop table if exists public.trade_scenarios cascade;
 drop table if exists public.reference_rate_values cascade;
 drop table if exists public.reference_rate_indices cascade;
 drop table if exists public.reference_rates cascade;
+drop table if exists public.issuing_bank_fee_records cascade;
+drop table if exists public.issuing_bank_quotation_versions cascade;
+drop table if exists public.issuing_bank_quotations cascade;
+drop table if exists public.non_issuing_bank_fee_records cascade;
+drop table if exists public.non_issuing_quotation_issuing_banks cascade;
+drop table if exists public.non_issuing_bank_quotation_versions cascade;
+drop table if exists public.non_issuing_bank_quotations cascade;
 drop table if exists public.fee_records cascade;
 drop table if exists public.pricing_records cascade;
 drop table if exists public.institution_fee_schedules cascade;
@@ -129,12 +138,11 @@ create table public.trade_template_events (
   unique (trade_template_id, event_name)
 );
 
-create table public.quotations (
+create table public.issuing_bank_quotations (
   id uuid primary key default gen_random_uuid(),
   reference text not null unique,
   institution_id uuid not null references public.institutions(id) on delete restrict,
   currency text not null check (currency ~ '^[A-Z]{3}$'),
-  product_type text not null default 'lc_financing' check (product_type = 'lc_financing'),
   tenor_days integer check (tenor_days is null or tenor_days > 0),
   min_amount numeric(20, 2) check (min_amount is null or min_amount >= 0),
   max_amount numeric(20, 2) check (max_amount is null or max_amount >= 0),
@@ -146,9 +154,10 @@ create table public.quotations (
   check (min_amount is null or max_amount is null or min_amount <= max_amount)
 );
 
-create table public.quotation_versions (
+create table public.issuing_bank_quotation_versions (
   id uuid primary key default gen_random_uuid(),
-  quotation_id uuid not null references public.quotations(id) on delete cascade,
+  issuing_bank_quotation_id uuid not null
+    references public.issuing_bank_quotations(id) on delete cascade,
   version integer not null check (version > 0),
   status text not null check (status in ('draft', 'active', 'superseded', 'withdrawn')),
   valid_from date not null,
@@ -156,51 +165,19 @@ create table public.quotation_versions (
   notes text,
   created_by uuid references public.profiles(id) on delete set null,
   created_at timestamptz not null default now(),
-  unique (quotation_id, version),
+  unique (issuing_bank_quotation_id, version),
+  unique (id, issuing_bank_quotation_id),
   check (valid_to is null or valid_to >= valid_from)
 );
 
-create table public.quotation_issuing_institutions (
-  quotation_id uuid not null references public.quotations(id) on delete cascade,
-  institution_id uuid not null references public.institutions(id) on delete cascade,
-  primary key (quotation_id, institution_id)
-);
-
-create table public.institution_fee_schedules (
+create table public.issuing_bank_fee_records (
   id uuid primary key default gen_random_uuid(),
-  institution_id uuid not null references public.institutions(id) on delete cascade,
-  currency text not null check (currency ~ '^[A-Z]{3}$'),
-  institution_role text not null check (institution_role in (
-    'issuing_bank', 'confirming_bank', 'advising_bank', 'negotiating_bank', 'financing_provider'
-  )),
-  status text not null check (status in ('draft', 'active', 'superseded', 'withdrawn')),
-  valid_from date not null,
-  valid_to date,
-  notes text,
-  created_by uuid references public.profiles(id) on delete set null,
-  created_at timestamptz not null default now(),
-  check (valid_to is null or valid_to >= valid_from)
-);
-
-create table public.fee_records (
-  id uuid primary key default gen_random_uuid(),
-  quotation_version_id uuid references public.quotation_versions(id) on delete cascade,
-  institution_fee_schedule_id uuid references public.institution_fee_schedules(id) on delete cascade,
+  issuing_bank_quotation_version_id uuid not null
+    references public.issuing_bank_quotation_versions(id) on delete cascade,
   fee_code text not null check (fee_code ~ '^[a-z0-9][a-z0-9_-]*$'),
   label text not null,
-  component_kind text not null check (component_kind in (
-    'issuing_fee', 'confirmation_fee', 'deferred_payment_fee', 'discounting', 'forfaiting',
-    'advising_fee', 'negotiation_fee', 'amendment_fee', 'swift_fee',
-    'discrepancy_fee', 'handling_fee', 'other_administrative_fee'
-  )),
-  disclosure_status text not null check (disclosure_status in ('priced', 'waived', 'not_applicable')),
-  inclusion_mode text not null default 'automatic' check (inclusion_mode in ('automatic', 'conditional')),
-  charged_by_institution_id uuid not null references public.institutions(id) on delete restrict,
-  charged_by_role text not null check (charged_by_role in (
-    'issuing_bank', 'confirming_bank', 'advising_bank', 'negotiating_bank', 'financing_provider'
-  )),
-  required_components text[] not null default '{}'::text[],
-  excluded_components text[] not null default '{}'::text[],
+  component_kind text not null check (component_kind in ('issuing_fee', 'swift_fee')),
+  disclosure_status text not null check (disclosure_status in ('priced', 'waived')),
   rate_type text check (rate_type in (
     'fixed_amount', 'flat_percentage', 'annualized_percentage', 'reference_plus_spread'
   )),
@@ -225,25 +202,109 @@ create table public.fee_records (
   include_end_date boolean not null default true,
   display_order integer not null default 0,
   notes text,
-  check ((quotation_version_id is null) <> (institution_fee_schedule_id is null)),
   check ((start_event_name is null) = (end_event_name is null)),
-  check (required_components <@ array['confirmation', 'discounting', 'forfaiting']::text[]),
-  check (excluded_components <@ array['confirmation', 'discounting', 'forfaiting']::text[]),
-  check (not (required_components && excluded_components)),
   check (
-    inclusion_mode = 'automatic'
-    or component_kind in (
-      'advising_fee', 'negotiation_fee', 'amendment_fee', 'swift_fee',
-      'discrepancy_fee', 'handling_fee', 'other_administrative_fee'
-    )
+    (disclosure_status = 'priced' and rate_type is not null)
+    or (disclosure_status = 'waived' and rate_type is null)
   ),
+  check (
+    (rate_type is null and fixed_amount is null and rate_pct is null and reference_rate_family is null and spread_pct is null)
+    or (rate_type = 'fixed_amount' and fixed_amount is not null and rate_pct is null and reference_rate_family is null and spread_pct is null)
+    or (rate_type in ('flat_percentage', 'annualized_percentage') and rate_pct is not null and fixed_amount is null and reference_rate_family is null and spread_pct is null)
+    or (rate_type = 'reference_plus_spread' and reference_rate_family is not null and spread_pct is not null and fixed_amount is null and rate_pct is null)
+  )
+);
+
+create table public.non_issuing_bank_quotations (
+  id uuid primary key default gen_random_uuid(),
+  reference text not null unique,
+  institution_id uuid not null references public.institutions(id) on delete restrict,
+  currency text not null check (currency ~ '^[A-Z]{3}$'),
+  tenor_days integer check (tenor_days is null or tenor_days > 0),
+  min_amount numeric(20, 2) check (min_amount is null or min_amount >= 0),
+  max_amount numeric(20, 2) check (max_amount is null or max_amount >= 0),
+  notes text,
+  created_by uuid references public.profiles(id) on delete set null,
+  updated_by uuid references public.profiles(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  check (min_amount is null or max_amount is null or min_amount <= max_amount)
+);
+
+create table public.non_issuing_bank_quotation_versions (
+  id uuid primary key default gen_random_uuid(),
+  non_issuing_bank_quotation_id uuid not null
+    references public.non_issuing_bank_quotations(id) on delete cascade,
+  version integer not null check (version > 0),
+  status text not null check (status in ('draft', 'active', 'superseded', 'withdrawn')),
+  valid_from date not null,
+  valid_to date,
+  notes text,
+  created_by uuid references public.profiles(id) on delete set null,
+  created_at timestamptz not null default now(),
+  unique (non_issuing_bank_quotation_id, version),
+  unique (id, non_issuing_bank_quotation_id),
+  check (valid_to is null or valid_to >= valid_from)
+);
+
+create table public.non_issuing_quotation_issuing_banks (
+  non_issuing_bank_quotation_id uuid not null
+    references public.non_issuing_bank_quotations(id) on delete cascade,
+  institution_id uuid not null references public.institutions(id) on delete cascade,
+  primary key (non_issuing_bank_quotation_id, institution_id)
+);
+
+create table public.non_issuing_bank_fee_records (
+  id uuid primary key default gen_random_uuid(),
+  non_issuing_bank_quotation_version_id uuid not null
+    references public.non_issuing_bank_quotation_versions(id) on delete cascade,
+  fee_code text not null check (fee_code ~ '^[a-z0-9][a-z0-9_-]*$'),
+  label text not null,
+  component_kind text not null check (component_kind in (
+    'confirmation_fee', 'deferred_payment_fee', 'discounting', 'forfaiting',
+    'advising_fee', 'negotiation_fee', 'swift_fee', 'handling_fee',
+    'other_administrative_fee'
+  )),
+  applicable_solutions text[] not null,
+  disclosure_status text not null check (disclosure_status in ('priced', 'waived')),
+  rate_type text check (rate_type in (
+    'fixed_amount', 'flat_percentage', 'annualized_percentage', 'reference_plus_spread'
+  )),
+  fixed_amount numeric(20, 6),
+  rate_pct numeric(12, 8),
+  reference_rate_family text check (reference_rate_family in ('TERM_SOFR', 'TERM_SHIBOR')),
+  spread_pct numeric(12, 8),
+  start_event_name text check (start_event_name in (
+    'trade_start', 'purchase_order', 'lc_issuance', 'shipment', 'invoice',
+    'presentation', 'acceptance', 'supplier_payment', 'negotiation', 'lc_maturity'
+  )),
+  end_event_name text check (end_event_name in (
+    'trade_start', 'purchase_order', 'lc_issuance', 'shipment', 'invoice',
+    'presentation', 'acceptance', 'supplier_payment', 'negotiation', 'lc_maturity'
+  )),
+  day_count_convention text check (day_count_convention in ('ACT/360', 'ACT/365', '30/360')),
+  billing_frequency text not null default 'once' check (billing_frequency in ('once', 'monthly', 'quarterly')),
+  partial_period_rounding text not null default 'actual' check (partial_period_rounding in ('actual', 'up')),
+  minimum_period_days integer check (minimum_period_days is null or minimum_period_days >= 0),
+  minimum_fee_amount numeric(20, 6) check (minimum_fee_amount is null or minimum_fee_amount >= 0),
+  include_start_date boolean not null default false,
+  include_end_date boolean not null default true,
+  display_order integer not null default 0,
+  notes text,
+  check ((start_event_name is null) = (end_event_name is null)),
+  check (cardinality(applicable_solutions) > 0),
+  check (applicable_solutions <@ array[
+    'confirmation_only', 'confirmation_with_discounting', 'discounting_only',
+    'forfaiting_only', 'confirmation_with_forfaiting'
+  ]::text[]),
   check (
     disclosure_status <> 'priced'
     or component_kind not in ('discounting', 'forfaiting')
     or rate_type = 'reference_plus_spread'
   ),
   check (
-    disclosure_status <> 'priced' or rate_type is not null
+    (disclosure_status = 'priced' and rate_type is not null)
+    or (disclosure_status = 'waived' and rate_type is null)
   ),
   check (
     (rate_type is null and fixed_amount is null and rate_pct is null and reference_rate_family is null and spread_pct is null)
@@ -290,34 +351,47 @@ create table public.trade_scenarios (
   name text not null,
   amount numeric(20, 2) not null check (amount > 0),
   currency text not null check (currency ~ '^[A-Z]{3}$'),
-  issuing_institution_id uuid references public.institutions(id) on delete restrict,
+  issuing_institution_id uuid not null references public.institutions(id) on delete restrict,
   trade_start_date date not null,
   comparison_mode text not null default 'core_fees_only'
     check (comparison_mode in ('core_fees_only', 'all_available_fees')),
-  included_conditional_fee_kinds text[] not null default '{}'::text[]
-    check (included_conditional_fee_kinds <@ array[
-      'advising_fee', 'negotiation_fee', 'amendment_fee', 'swift_fee',
-      'discrepancy_fee', 'handling_fee', 'other_administrative_fee'
-    ]::text[]),
+  non_issuing_selection_mode text not null default 'all'
+    check (non_issuing_selection_mode in ('all', 'institutions', 'quotations')),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (id, user_id)
 );
 
-create table public.scenario_comparison_cases (
-  id uuid primary key default gen_random_uuid(),
+create table public.scenario_solutions (
   trade_scenario_id uuid not null,
   user_id uuid not null,
-  case_reference text not null,
-  label text not null,
-  components text[] not null,
+  solution_kind text not null check (solution_kind in (
+    'confirmation_only', 'confirmation_with_discounting', 'discounting_only',
+    'forfaiting_only', 'confirmation_with_forfaiting'
+  )),
   display_order integer not null default 0,
+  primary key (trade_scenario_id, solution_kind),
   foreign key (trade_scenario_id, user_id)
-    references public.trade_scenarios(id, user_id) on delete cascade,
-  unique (trade_scenario_id, case_reference),
-  check (cardinality(components) > 0),
-  check (components <@ array['confirmation', 'discounting', 'forfaiting']::text[]),
-  check (not (components @> array['discounting', 'forfaiting']::text[]))
+    references public.trade_scenarios(id, user_id) on delete cascade
+);
+
+create table public.scenario_selected_non_issuing_institutions (
+  trade_scenario_id uuid not null,
+  user_id uuid not null,
+  institution_id uuid not null references public.institutions(id) on delete cascade,
+  primary key (trade_scenario_id, institution_id),
+  foreign key (trade_scenario_id, user_id)
+    references public.trade_scenarios(id, user_id) on delete cascade
+);
+
+create table public.scenario_selected_non_issuing_quotations (
+  trade_scenario_id uuid not null,
+  user_id uuid not null,
+  non_issuing_bank_quotation_id uuid not null
+    references public.non_issuing_bank_quotations(id) on delete cascade,
+  primary key (trade_scenario_id, non_issuing_bank_quotation_id),
+  foreign key (trade_scenario_id, user_id)
+    references public.trade_scenarios(id, user_id) on delete cascade
 );
 
 create table public.scenario_events (
@@ -351,49 +425,70 @@ create table public.comparison_runs (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.profiles(id) on delete cascade,
   trade_scenario_id uuid,
+  issuing_bank_quotation_id uuid references public.issuing_bank_quotations(id) on delete set null,
+  issuing_bank_quotation_version_id uuid references public.issuing_bank_quotation_versions(id) on delete set null,
   as_of_date date not null,
   comparison_mode text not null check (comparison_mode in ('core_fees_only', 'all_available_fees')),
   scenario_snapshot jsonb not null,
   resolved_timeline jsonb not null,
   created_at timestamptz not null default now(),
   unique (id, user_id),
+  foreign key (issuing_bank_quotation_version_id, issuing_bank_quotation_id)
+    references public.issuing_bank_quotation_versions(id, issuing_bank_quotation_id)
+    on delete set null,
   foreign key (trade_scenario_id, user_id)
-    references public.trade_scenarios(id, user_id) on delete cascade
+    references public.trade_scenarios(id, user_id) on delete cascade,
+  check ((issuing_bank_quotation_id is null) = (issuing_bank_quotation_version_id is null))
 );
 
 create table public.comparison_results (
   id uuid primary key default gen_random_uuid(),
   comparison_run_id uuid not null,
   user_id uuid not null,
-  quotation_id uuid references public.quotations(id) on delete set null,
-  quotation_version_id uuid references public.quotation_versions(id) on delete set null,
-  quotation_reference text not null,
-  institution_name text not null,
-  comparison_case_reference text not null,
-  comparison_case_label text not null,
-  selected_components text[] not null,
+  issuing_bank_quotation_id uuid references public.issuing_bank_quotations(id) on delete set null,
+  issuing_bank_quotation_version_id uuid references public.issuing_bank_quotation_versions(id) on delete set null,
+  non_issuing_bank_quotation_id uuid references public.non_issuing_bank_quotations(id) on delete set null,
+  non_issuing_bank_quotation_version_id uuid references public.non_issuing_bank_quotation_versions(id) on delete set null,
+  issuing_quotation_reference text not null,
+  issuing_institution_name text not null,
+  non_issuing_quotation_reference text not null,
+  non_issuing_institution_name text not null,
+  solution_kind text not null check (solution_kind in (
+    'confirmation_only', 'confirmation_with_discounting', 'discounting_only',
+    'forfaiting_only', 'confirmation_with_forfaiting'
+  )),
   eligible boolean not null,
   ineligibility_reasons text[] not null default '{}'::text[],
   coverage_status text check (coverage_status in ('complete', 'incomplete')),
-  missing_administrative_fee_slots jsonb,
-  core_cost numeric(20, 6),
-  administrative_cost numeric(20, 6),
-  confirmation_cost numeric(20, 6),
-  deferred_payment_cost numeric(20, 6),
-  financing_cost numeric(20, 6),
+  missing_fee_issues jsonb not null default '[]'::jsonb,
+  issuing_core_cost numeric(20, 6),
+  issuing_administrative_cost numeric(20, 6),
+  non_issuing_core_cost numeric(20, 6),
+  non_issuing_administrative_cost numeric(20, 6),
   total_cost numeric(20, 6),
   all_in_pct numeric(12, 8),
   result_snapshot jsonb not null,
   foreign key (comparison_run_id, user_id)
     references public.comparison_runs(id, user_id) on delete cascade,
+  foreign key (issuing_bank_quotation_version_id, issuing_bank_quotation_id)
+    references public.issuing_bank_quotation_versions(id, issuing_bank_quotation_id)
+    on delete set null,
+  foreign key (non_issuing_bank_quotation_version_id, non_issuing_bank_quotation_id)
+    references public.non_issuing_bank_quotation_versions(id, non_issuing_bank_quotation_id)
+    on delete set null,
   unique (id, user_id),
-  check (selected_components <@ array['confirmation', 'discounting', 'forfaiting']::text[]),
+  check ((issuing_bank_quotation_id is null) = (issuing_bank_quotation_version_id is null)),
+  check ((non_issuing_bank_quotation_id is null) = (non_issuing_bank_quotation_version_id is null)),
   check (
     (eligible and cardinality(ineligibility_reasons) = 0 and coverage_status is not null
-      and core_cost is not null and administrative_cost is not null and total_cost is not null and all_in_pct is not null)
+      and issuing_core_cost is not null and issuing_administrative_cost is not null
+      and non_issuing_core_cost is not null and non_issuing_administrative_cost is not null
+      and total_cost is not null and all_in_pct is not null)
     or
     (not eligible and cardinality(ineligibility_reasons) > 0 and coverage_status is null
-      and core_cost is null and administrative_cost is null and total_cost is null and all_in_pct is null)
+      and issuing_core_cost is null and issuing_administrative_cost is null
+      and non_issuing_core_cost is null and non_issuing_administrative_cost is null
+      and total_cost is null and all_in_pct is null)
   )
 );
 
@@ -401,22 +496,17 @@ create table public.comparison_cost_lines (
   id uuid primary key default gen_random_uuid(),
   comparison_result_id uuid not null,
   user_id uuid not null,
-  fee_record_id uuid references public.fee_records(id) on delete set null,
+  quotation_side text not null check (quotation_side in ('issuing_bank', 'non_issuing_bank')),
+  issuing_bank_fee_record_id uuid references public.issuing_bank_fee_records(id) on delete set null,
+  non_issuing_bank_fee_record_id uuid references public.non_issuing_bank_fee_records(id) on delete set null,
   fee_code text not null,
   label text not null,
   component_kind text not null check (component_kind in (
     'issuing_fee', 'confirmation_fee', 'deferred_payment_fee', 'discounting', 'forfaiting',
-    'advising_fee', 'negotiation_fee', 'amendment_fee', 'swift_fee',
-    'discrepancy_fee', 'handling_fee', 'other_administrative_fee'
+    'advising_fee', 'negotiation_fee', 'swift_fee', 'handling_fee',
+    'other_administrative_fee'
   )),
-  disclosure_status text not null check (disclosure_status in ('priced', 'waived', 'not_applicable')),
-  inclusion_mode text not null check (inclusion_mode in ('automatic', 'conditional')),
-  charged_by_institution_id uuid references public.institutions(id) on delete set null,
-  charged_by_role text not null check (charged_by_role in (
-    'issuing_bank', 'confirming_bank', 'advising_bank', 'negotiating_bank', 'financing_provider'
-  )),
-  fee_source text not null check (fee_source in ('quotation', 'institution_schedule')),
-  fee_source_id uuid,
+  disclosure_status text not null check (disclosure_status in ('priced', 'waived')),
   start_day integer,
   end_day integer,
   charge_days integer,
@@ -431,6 +521,11 @@ create table public.comparison_cost_lines (
   line_snapshot jsonb not null,
   foreign key (comparison_result_id, user_id)
     references public.comparison_results(id, user_id) on delete cascade,
+  check ((issuing_bank_fee_record_id is null) <> (non_issuing_bank_fee_record_id is null)),
+  check (
+    (quotation_side = 'issuing_bank' and issuing_bank_fee_record_id is not null)
+    or (quotation_side = 'non_issuing_bank' and non_issuing_bank_fee_record_id is not null)
+  ),
   check (
     (reference_rate_index_id is null and reference_rate_family is null
       and reference_rate_tenor_months is null and reference_rate_effective_date is null and base_rate_pct is null)
@@ -447,48 +542,67 @@ create index institutions_updated_by_idx on public.institutions (updated_by);
 create index trade_templates_created_by_idx on public.trade_templates (created_by);
 create index trade_templates_updated_by_idx on public.trade_templates (updated_by);
 create index trade_template_events_template_idx on public.trade_template_events (trade_template_id);
-create index quotations_filter_idx on public.quotations (currency, tenor_days, institution_id);
-create index quotations_institution_idx on public.quotations (institution_id);
-create index quotations_created_by_idx on public.quotations (created_by);
-create index quotations_updated_by_idx on public.quotations (updated_by);
-create index quotation_versions_quotation_idx on public.quotation_versions (quotation_id);
-create index quotation_versions_created_by_idx on public.quotation_versions (created_by);
-create index quotation_versions_active_idx on public.quotation_versions (quotation_id, valid_from desc, version desc) where status = 'active';
-create index quotation_issuing_institutions_institution_idx on public.quotation_issuing_institutions (institution_id);
-create index institution_fee_schedules_institution_idx on public.institution_fee_schedules (institution_id, currency, institution_role);
-create index institution_fee_schedules_created_by_idx on public.institution_fee_schedules (created_by);
-create index institution_fee_schedules_active_idx on public.institution_fee_schedules (institution_id, currency, valid_from desc) where status = 'active';
-create index fee_records_version_idx on public.fee_records (quotation_version_id, display_order) where quotation_version_id is not null;
-create index fee_records_schedule_idx on public.fee_records (institution_fee_schedule_id, display_order) where institution_fee_schedule_id is not null;
-create index fee_records_charged_by_idx on public.fee_records (charged_by_institution_id);
+create index issuing_bank_quotations_filter_idx on public.issuing_bank_quotations (institution_id, currency, tenor_days);
+create index issuing_bank_quotations_created_by_idx on public.issuing_bank_quotations (created_by);
+create index issuing_bank_quotations_updated_by_idx on public.issuing_bank_quotations (updated_by);
+create index issuing_bank_versions_quote_idx on public.issuing_bank_quotation_versions (issuing_bank_quotation_id);
+create index issuing_bank_versions_created_by_idx on public.issuing_bank_quotation_versions (created_by);
+create index issuing_bank_versions_active_idx on public.issuing_bank_quotation_versions (issuing_bank_quotation_id, valid_from desc, version desc) where status = 'active';
+create index issuing_bank_fee_records_version_idx on public.issuing_bank_fee_records (issuing_bank_quotation_version_id, display_order);
+create index non_issuing_bank_quotations_filter_idx on public.non_issuing_bank_quotations (currency, tenor_days, institution_id);
+create index non_issuing_bank_quotations_institution_idx on public.non_issuing_bank_quotations (institution_id);
+create index non_issuing_bank_quotations_created_by_idx on public.non_issuing_bank_quotations (created_by);
+create index non_issuing_bank_quotations_updated_by_idx on public.non_issuing_bank_quotations (updated_by);
+create index non_issuing_bank_versions_quote_idx on public.non_issuing_bank_quotation_versions (non_issuing_bank_quotation_id);
+create index non_issuing_bank_versions_created_by_idx on public.non_issuing_bank_quotation_versions (created_by);
+create index non_issuing_bank_versions_active_idx on public.non_issuing_bank_quotation_versions (non_issuing_bank_quotation_id, valid_from desc, version desc) where status = 'active';
+create index non_issuing_quote_issuing_banks_institution_idx on public.non_issuing_quotation_issuing_banks (institution_id);
+create index non_issuing_bank_fee_records_version_idx on public.non_issuing_bank_fee_records (non_issuing_bank_quotation_version_id, display_order);
 create index reference_rate_indices_created_by_idx on public.reference_rate_indices (created_by);
 create index reference_rate_indices_updated_by_idx on public.reference_rate_indices (updated_by);
 create index reference_rate_values_lookup_idx on public.reference_rate_values (reference_rate_index_id, effective_date desc);
 create index reference_rate_values_created_by_idx on public.reference_rate_values (created_by);
 create index trade_scenarios_user_idx on public.trade_scenarios (user_id, created_at desc);
 create index trade_scenarios_template_idx on public.trade_scenarios (trade_template_id) where trade_template_id is not null;
-create index trade_scenarios_issuer_idx on public.trade_scenarios (issuing_institution_id) where issuing_institution_id is not null;
-create index scenario_comparison_cases_scenario_user_idx on public.scenario_comparison_cases (trade_scenario_id, user_id);
-create index scenario_comparison_cases_user_idx on public.scenario_comparison_cases (user_id);
+create index trade_scenarios_issuer_idx on public.trade_scenarios (issuing_institution_id);
+create index scenario_solutions_user_idx on public.scenario_solutions (user_id);
+create index scenario_solutions_scenario_user_idx on public.scenario_solutions (trade_scenario_id, user_id);
+create index scenario_selected_non_issuing_institutions_user_idx on public.scenario_selected_non_issuing_institutions (user_id);
+create index scenario_selected_non_issuing_institutions_institution_idx on public.scenario_selected_non_issuing_institutions (institution_id);
+create index scenario_selected_non_issuing_institutions_scenario_user_idx on public.scenario_selected_non_issuing_institutions (trade_scenario_id, user_id);
+create index scenario_selected_non_issuing_quotations_user_idx on public.scenario_selected_non_issuing_quotations (user_id);
+create index scenario_selected_non_issuing_quotations_quote_idx on public.scenario_selected_non_issuing_quotations (non_issuing_bank_quotation_id);
+create index scenario_selected_non_issuing_quotations_scenario_user_idx on public.scenario_selected_non_issuing_quotations (trade_scenario_id, user_id);
 create index scenario_events_scenario_user_idx on public.scenario_events (trade_scenario_id, user_id);
 create index scenario_events_user_idx on public.scenario_events (user_id);
 create index comparison_runs_user_idx on public.comparison_runs (user_id, created_at desc);
 create index comparison_runs_scenario_user_idx on public.comparison_runs (trade_scenario_id, user_id) where trade_scenario_id is not null;
+create index comparison_runs_issuing_quote_idx on public.comparison_runs (issuing_bank_quotation_id) where issuing_bank_quotation_id is not null;
+create index comparison_runs_issuing_version_idx on public.comparison_runs (issuing_bank_quotation_version_id) where issuing_bank_quotation_version_id is not null;
+create index comparison_runs_issuing_pair_idx on public.comparison_runs (issuing_bank_quotation_version_id, issuing_bank_quotation_id) where issuing_bank_quotation_version_id is not null;
 create index comparison_results_user_idx on public.comparison_results (user_id);
 create index comparison_results_run_idx on public.comparison_results (comparison_run_id);
-create index comparison_results_quotation_idx on public.comparison_results (quotation_id) where quotation_id is not null;
-create index comparison_results_version_idx on public.comparison_results (quotation_version_id) where quotation_version_id is not null;
+create index comparison_results_run_user_idx on public.comparison_results (comparison_run_id, user_id);
+create index comparison_results_issuing_quote_idx on public.comparison_results (issuing_bank_quotation_id) where issuing_bank_quotation_id is not null;
+create index comparison_results_issuing_version_idx on public.comparison_results (issuing_bank_quotation_version_id) where issuing_bank_quotation_version_id is not null;
+create index comparison_results_issuing_pair_idx on public.comparison_results (issuing_bank_quotation_version_id, issuing_bank_quotation_id) where issuing_bank_quotation_version_id is not null;
+create index comparison_results_non_issuing_quote_idx on public.comparison_results (non_issuing_bank_quotation_id) where non_issuing_bank_quotation_id is not null;
+create index comparison_results_non_issuing_version_idx on public.comparison_results (non_issuing_bank_quotation_version_id) where non_issuing_bank_quotation_version_id is not null;
+create index comparison_results_non_issuing_pair_idx on public.comparison_results (non_issuing_bank_quotation_version_id, non_issuing_bank_quotation_id) where non_issuing_bank_quotation_version_id is not null;
 create index comparison_cost_lines_user_idx on public.comparison_cost_lines (user_id);
 create index comparison_cost_lines_result_idx on public.comparison_cost_lines (comparison_result_id);
-create index comparison_cost_lines_fee_record_idx on public.comparison_cost_lines (fee_record_id) where fee_record_id is not null;
-create index comparison_cost_lines_charged_by_idx on public.comparison_cost_lines (charged_by_institution_id) where charged_by_institution_id is not null;
+create index comparison_cost_lines_result_user_idx on public.comparison_cost_lines (comparison_result_id, user_id);
+create index comparison_cost_lines_issuing_fee_idx on public.comparison_cost_lines (issuing_bank_fee_record_id) where issuing_bank_fee_record_id is not null;
+create index comparison_cost_lines_non_issuing_fee_idx on public.comparison_cost_lines (non_issuing_bank_fee_record_id) where non_issuing_bank_fee_record_id is not null;
 create index comparison_cost_lines_reference_rate_idx on public.comparison_cost_lines (reference_rate_index_id) where reference_rate_index_id is not null;
 
 create trigger institutions_set_updated_at before update on public.institutions
 for each row execute function public.set_updated_at();
 create trigger trade_templates_set_updated_at before update on public.trade_templates
 for each row execute function public.set_updated_at();
-create trigger quotations_set_updated_at before update on public.quotations
+create trigger issuing_bank_quotations_set_updated_at before update on public.issuing_bank_quotations
+for each row execute function public.set_updated_at();
+create trigger non_issuing_bank_quotations_set_updated_at before update on public.non_issuing_bank_quotations
 for each row execute function public.set_updated_at();
 create trigger reference_rate_indices_set_updated_at before update on public.reference_rate_indices
 for each row execute function public.set_updated_at();
@@ -498,15 +612,19 @@ for each row execute function public.set_updated_at();
 alter table public.institutions enable row level security;
 alter table public.trade_templates enable row level security;
 alter table public.trade_template_events enable row level security;
-alter table public.quotations enable row level security;
-alter table public.quotation_versions enable row level security;
-alter table public.quotation_issuing_institutions enable row level security;
-alter table public.institution_fee_schedules enable row level security;
-alter table public.fee_records enable row level security;
+alter table public.issuing_bank_quotations enable row level security;
+alter table public.issuing_bank_quotation_versions enable row level security;
+alter table public.issuing_bank_fee_records enable row level security;
+alter table public.non_issuing_bank_quotations enable row level security;
+alter table public.non_issuing_bank_quotation_versions enable row level security;
+alter table public.non_issuing_quotation_issuing_banks enable row level security;
+alter table public.non_issuing_bank_fee_records enable row level security;
 alter table public.reference_rate_indices enable row level security;
 alter table public.reference_rate_values enable row level security;
 alter table public.trade_scenarios enable row level security;
-alter table public.scenario_comparison_cases enable row level security;
+alter table public.scenario_solutions enable row level security;
+alter table public.scenario_selected_non_issuing_institutions enable row level security;
+alter table public.scenario_selected_non_issuing_quotations enable row level security;
 alter table public.scenario_events enable row level security;
 alter table public.comparison_runs enable row level security;
 alter table public.comparison_results enable row level security;
@@ -516,9 +634,11 @@ do $$
 declare table_name text;
 begin
   foreach table_name in array array[
-    'institutions', 'trade_templates', 'trade_template_events', 'quotations',
-    'quotation_versions', 'quotation_issuing_institutions', 'institution_fee_schedules',
-    'fee_records', 'reference_rate_indices', 'reference_rate_values'
+    'institutions', 'trade_templates', 'trade_template_events',
+    'issuing_bank_quotations', 'issuing_bank_quotation_versions', 'issuing_bank_fee_records',
+    'non_issuing_bank_quotations', 'non_issuing_bank_quotation_versions',
+    'non_issuing_quotation_issuing_banks', 'non_issuing_bank_fee_records',
+    'reference_rate_indices', 'reference_rate_values'
   ] loop
     execute format('create policy "Authenticated users can read %1$s" on public.%1$I for select to authenticated using (true)', table_name);
     execute format('create policy "Editors can insert %1$s" on public.%1$I for insert to authenticated with check ((select private.current_user_role()) in (''admin'', ''editor''))', table_name);
@@ -532,7 +652,9 @@ do $$
 declare table_name text;
 begin
   foreach table_name in array array[
-    'trade_scenarios', 'scenario_comparison_cases', 'scenario_events',
+    'trade_scenarios', 'scenario_solutions',
+    'scenario_selected_non_issuing_institutions',
+    'scenario_selected_non_issuing_quotations', 'scenario_events',
     'comparison_runs', 'comparison_results', 'comparison_cost_lines'
   ] loop
     execute format('create policy "Users can read own %1$s" on public.%1$I for select to authenticated using (user_id = (select auth.uid()))', table_name);
@@ -546,15 +668,19 @@ $$;
 grant select, insert, update, delete on public.institutions to authenticated;
 grant select, insert, update, delete on public.trade_templates to authenticated;
 grant select, insert, update, delete on public.trade_template_events to authenticated;
-grant select, insert, update, delete on public.quotations to authenticated;
-grant select, insert, update, delete on public.quotation_versions to authenticated;
-grant select, insert, update, delete on public.quotation_issuing_institutions to authenticated;
-grant select, insert, update, delete on public.institution_fee_schedules to authenticated;
-grant select, insert, update, delete on public.fee_records to authenticated;
+grant select, insert, update, delete on public.issuing_bank_quotations to authenticated;
+grant select, insert, update, delete on public.issuing_bank_quotation_versions to authenticated;
+grant select, insert, update, delete on public.issuing_bank_fee_records to authenticated;
+grant select, insert, update, delete on public.non_issuing_bank_quotations to authenticated;
+grant select, insert, update, delete on public.non_issuing_bank_quotation_versions to authenticated;
+grant select, insert, update, delete on public.non_issuing_quotation_issuing_banks to authenticated;
+grant select, insert, update, delete on public.non_issuing_bank_fee_records to authenticated;
 grant select, insert, update, delete on public.reference_rate_indices to authenticated;
 grant select, insert, update, delete on public.reference_rate_values to authenticated;
 grant select, insert, update, delete on public.trade_scenarios to authenticated;
-grant select, insert, update, delete on public.scenario_comparison_cases to authenticated;
+grant select, insert, update, delete on public.scenario_solutions to authenticated;
+grant select, insert, update, delete on public.scenario_selected_non_issuing_institutions to authenticated;
+grant select, insert, update, delete on public.scenario_selected_non_issuing_quotations to authenticated;
 grant select, insert, update, delete on public.scenario_events to authenticated;
 grant select, insert, update, delete on public.comparison_runs to authenticated;
 grant select, insert, update, delete on public.comparison_results to authenticated;

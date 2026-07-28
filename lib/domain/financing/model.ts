@@ -1,35 +1,29 @@
-export const financingComponents = [
-  'confirmation',
-  'discounting',
-  'forfaiting',
+export const solutionKinds = [
+  'confirmationOnly',
+  'confirmationWithDiscounting',
+  'discountingOnly',
+  'forfaitingOnly',
+  'confirmationWithForfaiting',
 ] as const;
 
-export type FinancingComponent = (typeof financingComponents)[number];
+export type SolutionKind = (typeof solutionKinds)[number];
 
-export type ComparisonCase = {
-  id: string;
-  label: string;
-  components: FinancingComponent[];
+export const solutionLabels: Record<SolutionKind, string> = {
+  confirmationOnly: 'Confirmation only',
+  confirmationWithDiscounting: 'Confirmation + discounting',
+  discountingOnly: 'Discounting only',
+  forfaitingOnly: 'Forfaiting only',
+  confirmationWithForfaiting: 'Confirmation + forfaiting',
 };
 
-export function assertValidComparisonCase(comparisonCase: ComparisonCase): void {
-  if (!comparisonCase.id.trim() || !comparisonCase.label.trim()) {
-    throw new Error('Every comparison case requires an id and label.');
-  }
-  if (comparisonCase.components.length === 0) {
-    throw new Error(`Comparison case "${comparisonCase.label}" must select at least one component.`);
-  }
-  if (new Set(comparisonCase.components).size !== comparisonCase.components.length) {
-    throw new Error(`Comparison case "${comparisonCase.label}" contains duplicate components.`);
-  }
-  if (hasComponent(comparisonCase, 'discounting') && hasComponent(comparisonCase, 'forfaiting')) {
-    throw new Error('Discounting and forfaiting are alternative early-payment components.');
-  }
+export function isConfirmationSolution(solution: SolutionKind): boolean {
+  return (
+    solution === 'confirmationOnly' ||
+    solution === 'confirmationWithDiscounting' ||
+    solution === 'confirmationWithForfaiting'
+  );
 }
 
-export function hasComponent(
-  comparisonCase: ComparisonCase,
-  component: FinancingComponent,
-): boolean {
-  return comparisonCase.components.includes(component);
+export function isEarlyPaymentSolution(solution: SolutionKind): boolean {
+  return solution !== 'confirmationOnly';
 }
